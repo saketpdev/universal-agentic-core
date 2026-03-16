@@ -20,6 +20,27 @@ LLM_TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "transfer_to_agent",
+            "description": "Hands off the conversation to a specialized agent.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "target_agent": {
+                        "type": "string", 
+                        "description": "The name of the agent to transfer to. Options: 'supervisor', 'customer_support', 'invoice_processor'"
+                    },
+                    "reason": {
+                        "type": "string",
+                        "description": "Brief explanation of why you are transferring to this agent."
+                    }
+                },
+                "required": ["target_agent", "reason"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "fetch_user_data",
             "description": "Fetches user profile. Use this to check tier status.",
             "parameters": {

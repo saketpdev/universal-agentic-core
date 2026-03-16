@@ -1,26 +1,20 @@
-import os
 import json
 import logging
 from typing import Type
 from pydantic import BaseModel
-from openai import OpenAI
+from core.llm import call_llm
 
 logger = logging.getLogger("AgenticCore.Evaluator")
 
-client = OpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=os.environ.get("GROQ_API_KEY")
-)
-
 def run_dynamic_evaluation(output_text: str, objective: str, evaluator_prompt: str, schema_class: Type[BaseModel]) -> BaseModel:
-    """A truly universal Judge that adapts its criteria based on the loaded skill."""
+    """A truly universal Judge routed through the LLM Gateway."""
     
     schema_json = schema_class.model_json_schema()
     
     messages = [
         {
             "role": "system", 
-            "content": f"{evaluator_prompt}\nYou MUST return valid JSON matching this exact schema: {json.dumps(schema_json)}"
+            "content": f"{evaluator_prompt}\nYou MUST return valid JSON matching this exact schema:\n{json.dumps(schema_json)}"
         },
         {
             "role": "user", 
@@ -28,17 +22,16 @@ def run_dynamic_evaluation(output_text: str, objective: str, evaluator_prompt: s
         }
     ]
     
-    logger.info(f"Running dynamic Evaluator using {schema_class.__name__} schema...")
+    logger.info(f"Evaluator: Grading against {schema_class.__name__} schema...")
     
     try:
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
+        response_msg = call_llm(
             messages=messages,
-            response_format={"type": "json_object"},
-            temperature=0.0
+            response_schema=schema_json,
+            tier="judge"
         )
         
-        result_dict = json.loads(response.choices[0].message.content)
+        result_dict = json.loads(response_msg.content)
         return schema_class(**result_dict)
         
     except Exception as e:

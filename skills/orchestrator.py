@@ -21,29 +21,25 @@ def get_schema_class(module_name: str, class_name: str):
         logger.error(f"Failed to dynamically load schema {module_name}.{class_name}: {e}")
         raise
 
-def load_skill_context(user_prompt: str) -> Dict[str, Any]:
-    """Loads prompt text from JSON and the schema class from dynamic import."""
+def get_agent_context(agent_name: str) -> Dict[str, Any]:
+    """Directly loads a specific agent's SOP and Judge for Swarm handoffs."""
     registry = load_registry()
-    prompt_lower = user_prompt.lower()
-    
-    selected_skill_key = "customer_support" # Default fallback
-    
-    # Dynamic keyword routing
-    for skill_key, skill_data in registry.items():
-        if any(keyword in prompt_lower for keyword in skill_data.get("trigger_keywords", [])):
-            selected_skill_key = skill_key
-            break
-            
-    logger.info(f"Orchestrator: Routing to {selected_skill_key} skill.")
-    skill_config = registry[selected_skill_key]
-    
-    # Instantiate the dynamic class mapping
+
+    # Fallback safety
+    if agent_name not in registry:
+        # STRICT DAG FAIL:
+        raise ValueError(f"CRITICAL: Agent '{agent_name}' not found in registry. The Planner hallucinated.")
+
+    logger.info(f"Orchestrator: Loading context for '{agent_name}' agent.")
+    skill_config = registry[agent_name]
+
     schema_class = get_schema_class(
         skill_config["evaluator_schema_module"], 
         skill_config["evaluator_schema_class"]
     )
-    
+
     return {
+        "agent_name": agent_name,
         "generator_prompt": skill_config["generator_prompt"],
         "evaluator_prompt": skill_config["evaluator_prompt"],
         "evaluator_schema": schema_class
