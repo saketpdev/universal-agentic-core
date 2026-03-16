@@ -1,6 +1,6 @@
 from typing import Dict, Any
 
-# The Enterprise LLM Gateway Configuration
+# The LLM Gateway Configuration
 MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
     "planner": {
         "provider": "groq",
