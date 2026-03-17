@@ -2,24 +2,28 @@ import json
 import logging
 import traceback
 from models.state import AgentRequest, AgentResponse
-from core.infrastructure import budget_manager
+from core.infrastructure import budget_manager, BudgetExceededException
 from core.engine.state_manager import initialize_or_resume_state, checkpoint_state
 from core.engine.node_executor import execute_worker_node
 from core.planner import generate_execution_plan
+from core.telemetry import TelemetryLogger
 
 logger = logging.getLogger("AgenticCore.DAGRunner")
 
+WORKFLOW_RESERVE_USD = 0.50  # We lock 50 cents per workflow run
+
 def run_agentic_loop(request: AgentRequest) -> AgentResponse:
-    budget_lock_id = budget_manager.reserve(amount=5.00, ttl=300)
-    logger.info(f"[{request.thread_id}] Starting DAG Execution.")
+    telemetry = TelemetryLogger(trace_id=request.thread_id)
     
     try:
+        # 1. THE PRE-FLIGHT DEPOSIT
+        budget_manager.reserve_deposit(trace_id=request.thread_id, max_budget_usd=WORKFLOW_RESERVE_USD)
+        
         briefcase = initialize_or_resume_state(request)
 
-        # Explicit Planner Execution
         if not briefcase.execution_plan:
-            logger.info(f"[{request.thread_id}] Waking up Planner Agent...")
             briefcase.execution_plan = generate_execution_plan(request.user_prompt)
+            telemetry.log_decision("planner", f"Generated {len(briefcase.execution_plan)} SubTasks.", context="DAG Generation")
             checkpoint_state(briefcase, request)
 
         while briefcase.current_step_index < len(briefcase.execution_plan):
@@ -29,10 +33,7 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
                 briefcase.current_step_index += 1
                 continue
                 
-            logger.info(f"[{request.thread_id}] Executing Step {briefcase.current_step_index + 1}: {current_task.agent_target}")
             current_task.status = "in_progress"
-            
-            # Aggressive Checkpointing to prevent double-execution on crash
             checkpoint_state(briefcase, request)
             
             success, output = execute_worker_node(
@@ -45,15 +46,15 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
                 current_task.status = "failed"
                 briefcase.has_critical_error = True
                 checkpoint_state(briefcase, request)
-                budget_manager.release(budget_lock_id)
                 return AgentResponse(status="error", trace_id=request.thread_id, output=output, iterations=briefcase.current_step_index)
 
             briefcase.domain_state[current_task.agent_target] = {"latest_output": output}
             current_task.status = "completed"
+            telemetry.log_state(current_task.agent_target, briefcase.current_step_index, briefcase.domain_state[current_task.agent_target])
+            
             briefcase.current_step_index += 1
             checkpoint_state(briefcase, request)
 
-        budget_manager.release(budget_lock_id)
         return AgentResponse(
             status="success",
             trace_id=request.thread_id,
@@ -61,7 +62,14 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
             iterations=briefcase.current_step_index
         )
         
+    except BudgetExceededException as be:
+        logger.error(f"[{request.thread_id}] Workflow terminated due to FinOps Guardrail: {str(be)}")
+        return AgentResponse(status="budget_exceeded", trace_id=request.thread_id, output=str(be), iterations=0)
+        
     except Exception as e:
         logger.error(f"[{request.thread_id}] Fatal graph error:\n{traceback.format_exc()}")
-        budget_manager.release(budget_lock_id)
         raise e
+        
+    finally:
+        # 2. THE RECONCILIATION (Always refund unused money)
+        budget_manager.release_deposit(trace_id=request.thread_id)

@@ -10,6 +10,9 @@ class StandardTokenUsage(BaseModel):
     prompt_tokens: int = 0
     completion_tokens: int = 0
     total_tokens: int = 0
+    prompt_cost_usd: float = 0.0
+    completion_cost_usd: float = 0.0
+    total_cost_usd: float = 0.0
 
 class StandardLLMResponse(BaseModel):
     content: str

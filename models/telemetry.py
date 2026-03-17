@@ -47,3 +47,4 @@ class MetricEvent(BaseEvent):
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
+    cost_usd: float = 0.0

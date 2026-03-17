@@ -2,19 +2,79 @@ import redis
 import uuid
 import logging
 import hashlib
+from opentelemetry import baggage
 
 logger = logging.getLogger("AgenticCore.Infrastructure")
 redis_client = redis.Redis(host='localhost', port=6379, db=0, decode_responses=True)
 
-class RedisBudgetManager:
-    def reserve(self, amount: float, ttl: int) -> str:
-        lock_id = f"budget_lock_{uuid.uuid4().hex[:8]}"
-        redis_client.set(lock_id, str(amount), ex=ttl)
-        return lock_id
+class BudgetExceededException(Exception):
+    """Raised when an agent burns through its pre-flight deposit."""
+    pass
 
-    def release(self, lock_id: str):
-        redis_client.delete(lock_id)
-        logger.info(f"Budget lock {lock_id} released.")
+class FinOpsLedger:
+    def __init__(self, redis_conn):
+        self.redis = redis_conn
+
+    def _get_current_tenant(self) -> str:
+        """Securely extracts the opaque tenant_id from OpenTelemetry Baggage."""
+        tenant_id = baggage.get_baggage("tenant_id")
+        if not tenant_id:
+            logger.warning("FinOps: No tenant_id found in Baggage. Defaulting to 'system_default'.")
+            return "system_default"
+        return str(tenant_id)
+
+    def get_balance(self) -> float:
+        """Check the tenant's current total balance."""
+        tenant_id = self._get_current_tenant()
+        val = self.redis.get(f"ledger:{tenant_id}:balance")
+        return float(val) if val else 0.0
+
+    def add_funds(self, tenant_id: str, amount_usd: float):
+        """Admin function to credit a tenant's account."""
+        self.redis.incrbyfloat(f"ledger:{tenant_id}:balance", amount_usd)
+        logger.info(f"FinOps: Added ${amount_usd:.2f} to tenant {tenant_id}")
+
+    def reserve_deposit(self, trace_id: str, max_budget_usd: float):
+        """The Pre-Flight Check. Reserves funds before the DAG starts."""
+        tenant_id = self._get_current_tenant()
+        current_balance = self.get_balance()
+        
+        if current_balance < max_budget_usd:
+            raise BudgetExceededException(
+                f"FinOps Rejected: Tenant {tenant_id} balance (${current_balance:.2f}) "
+                f"is below the required workflow deposit (${max_budget_usd:.2f})."
+            )
+            
+        self.redis.incrbyfloat(f"ledger:{tenant_id}:balance", -max_budget_usd)
+        self.redis.set(f"escrow:{trace_id}", max_budget_usd)
+        logger.info(f"FinOps: Reserved ${max_budget_usd:.2f} deposit for trace {trace_id}")
+
+    def burn_down(self, trace_id: str, cost_usd: float):
+        """The Circuit Breaker. Deducts micro-costs from the escrow."""
+        if cost_usd <= 0:
+            return
+            
+        tenant_id = self._get_current_tenant()
+        remaining = self.redis.incrbyfloat(f"escrow:{trace_id}", -cost_usd)
+        
+        # 💥 THE HARD CIRCUIT BREAKER 💥
+        if remaining <= 0:
+            logger.error(f"FinOps: CIRCUIT BREAKER TRIPPED for tenant {tenant_id} on trace {trace_id}!")
+            raise BudgetExceededException("Hard token budget exceeded. Task forcefully terminated.")
+
+    def release_deposit(self, trace_id: str):
+        """The Reconciliation. Refunds unspent escrow back to the ledger."""
+        tenant_id = self._get_current_tenant()
+        escrow_val = self.redis.get(f"escrow:{trace_id}")
+        
+        if escrow_val:
+            remaining = float(escrow_val)
+            if remaining > 0:
+                self.redis.incrbyfloat(f"ledger:{tenant_id}:balance", remaining)
+                logger.info(f"FinOps: Workflow complete. Refunded ${remaining:.5f} to {tenant_id}")
+                
+            self.redis.delete(f"escrow:{trace_id}")
+
 
 class RedisIdempotencyRegistry:
     def generate_hash(self, thread_id: str, func_name: str, args_str: str) -> str:
@@ -31,5 +91,6 @@ class RedisIdempotencyRegistry:
     def save_idempotency(self, hash_key: str, result: str):
         redis_client.set(f"idem:{hash_key}", result, ex=86400) # 24 hour cache
 
-budget_manager = RedisBudgetManager()
+# Upgrade the initialized instances
+budget_manager = FinOpsLedger(redis_client)
 db = RedisIdempotencyRegistry()

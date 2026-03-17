@@ -7,23 +7,32 @@ MODEL_REGISTRY: Dict[str, Dict[str, Any]] = {
         "base_url": "https://api.groq.com/openai/v1",
         "api_key_env": "GROQ_API_KEY",
         "model": "llama-3.3-70b-versatile",
-        "supports_json_schema": False, # Groq's current quirk
-        "default_temp": 0.0
+        "supports_json_schema": False,
+        "default_temp": 0.0,
+        # FinOps Pricing (USD per 1M tokens)
+        "input_cost_per_m": 0.59,
+        "output_cost_per_m": 0.79
     },
     "worker": {
         "provider": "groq",
         "base_url": "https://api.groq.com/openai/v1",
         "api_key_env": "GROQ_API_KEY",
-        "model": "llama-3.1-8b-instant", # 10x cheaper and faster for ReAct loops
+        "model": "llama-3.1-8b-instant", 
         "supports_json_schema": False,
-        "default_temp": 0.1
+        "default_temp": 0.1,
+        # FinOps Pricing (USD per 1M tokens) - Blindingly cheap
+        "input_cost_per_m": 0.05,  
+        "output_cost_per_m": 0.08
     },
     "judge": {
         "provider": "groq",
         "base_url": "https://api.groq.com/openai/v1",
         "api_key_env": "GROQ_API_KEY",
-        "model": "llama-3.3-70b-versatile", # Needs high IQ to evaluate outputs
+        "model": "llama-3.3-70b-versatile",
         "supports_json_schema": False,
-        "default_temp": 0.0
+        "default_temp": 0.0,
+        # FinOps Pricing (USD per 1M tokens)
+        "input_cost_per_m": 0.59,
+        "output_cost_per_m": 0.79
     }
 }

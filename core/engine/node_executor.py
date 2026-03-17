@@ -6,7 +6,7 @@ from typing import Tuple
 
 from models.state import SubTask, SharedBriefcase
 from core.llm import call_llm
-from core.infrastructure import db
+from core.infrastructure import db, budget_manager
 from core.security import asymmetric_action_gate
 from tools.registry import execute_secure_tool, LLM_TOOLS
 from skills.orchestrator import get_agent_context
@@ -42,18 +42,24 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
             # 1. Fetch Provider-Agnostic Response
             response: StandardLLMResponse = call_llm(messages, tools=LLM_TOOLS, tier="worker")
             
-            # 2. Log Metrics
+            # 2. FINOPS: BURN DOWN THE LEDGER
+            if response.usage and response.usage.total_cost_usd > 0:
+                # If this call pushes the escrow below zero, it will raise BudgetExceededException
+                # and violently exit the loop, saving your wallet.
+                budget_manager.burn_down(trace_id=thread_id, cost_usd=response.usage.total_cost_usd)
+
+            # 3. Log Metrics
             if response.usage:
                 telemetry.log_metric(
                     agent_id=task.agent_target, 
                     tier="worker", 
                     prompt_tokens=response.usage.prompt_tokens, 
                     completion_tokens=response.usage.completion_tokens
-                )
+                    cost_usd=response.usage.total_cost_usd
 
             safe_content = response.content or ""
             
-            # 3. Log Decision (The internal monologue)
+            # 4. Log Decision (The internal monologue)
             if safe_content:
                 telemetry.log_decision(
                     agent_id=task.agent_target, 
@@ -61,7 +67,7 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
                     context=f"ReAct Loop Iteration {tool_iters + 1}"
                 )
 
-            # 4. Clean Tool Array Builder
+            # 5. Clean Tool Array Builder
             assistant_msg = {"role": "assistant", "content": safe_content}
             if response.tool_calls:
                 assistant_msg["tool_calls"] = [
@@ -75,12 +81,12 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
             
             messages.append(assistant_msg)
             
-            # 5. Break if no tools are requested (Agent is done)
+            # 6. Break if no tools are requested (Agent is done)
             if not response.tool_calls:
                 worker_final_output = safe_content
                 break 
                 
-            # 6. Clean iteration over StandardToolCall objects
+            # 7. Clean iteration over StandardToolCall objects
             for call in response.tool_calls:
                 correlation_id = str(uuid.uuid4())
                 

@@ -95,13 +95,25 @@ def call_llm(
     logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']}")
 
     try:
-        # Strategy Pattern Routing
+        # 1. Execute Strategy Pattern Routing
         if config["provider"] in ["openai", "groq", "vllm", "deepseek"]:
-            return _execute_openai_compatible(config, messages, tools, response_schema, api_key)
+            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key)
         elif config["provider"] == "anthropic":
-            return _execute_anthropic(config, messages, tools, response_schema, api_key)
+            response = _execute_anthropic(config, messages, tools, response_schema, api_key)
         else:
             raise ValueError(f"Unsupported provider: {config['provider']}")
+            
+        # 2. FINOPS MATH: Calculate actual USD cost
+        if response.usage:
+            # Divide by 1,000,000 to get the multiplier, then multiply by the registry price
+            p_cost = (response.usage.prompt_tokens / 1_000_000.0) * config.get("input_cost_per_m", 0.0)
+            c_cost = (response.usage.completion_tokens / 1_000_000.0) * config.get("output_cost_per_m", 0.0)
+            
+            response.usage.prompt_cost_usd = p_cost
+            response.usage.completion_cost_usd = c_cost
+            response.usage.total_cost_usd = p_cost + c_cost
+            
+        return response
             
     except Exception as e:
         logger.error(f"LLM Gateway Execution Failed on tier '{tier}': {str(e)}")

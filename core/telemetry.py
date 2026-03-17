@@ -79,7 +79,7 @@ class TelemetryLogger:
         )
         self._record_otel_event(f"state.checkpoint", event, {"step.index": step_index})
 
-    def log_metric(self, agent_id: str, tier: str, prompt_tokens: int, completion_tokens: int):
+    def log_metric(self, agent_id: str, tier: str, prompt_tokens: int, completion_tokens: int, cost_usd: float = 0.0):
         total = prompt_tokens + completion_tokens
         event = MetricEvent(
             trace_id=self.trace_id,
@@ -88,9 +88,11 @@ class TelemetryLogger:
             model_tier=tier,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
-            total_tokens=total
+            total_tokens=total,
+            cost_usd=cost_usd
         )
         self._record_otel_event(f"{agent_id}.llm_metrics", event, {
             "llm.tier": tier,
-            "llm.usage.total_tokens": total
+            "llm.usage.total_tokens": total,
+            "llm.usage.cost_usd": cost_usd
         })
