@@ -25,14 +25,27 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
     current_skill = get_agent_context(task.agent_target)
     agent_specific_data = briefcase.domain_state.get(task.agent_target, {})
     
+    # 1. THE STATIC PREFIX (Highly Cacheable)
+    # This must be the EXACT same string every time this agent runs.
+    # We flag it so our gateway knows to explicitly cache this block for Anthropic.
     messages = [
-        {"role": "system", "content": current_skill["generator_prompt"]},
-        {"role": "user", "content": f"INSTRUCTION: {task.instruction}\n\nVAULT DATA: {json.dumps(agent_specific_data)}"}
+        {
+            "role": "system", 
+            "content": current_skill["generator_prompt"],
+            "cache_control": True
+        }
     ]
+    
+    # 2. THE DYNAMIC PAYLOAD (The Cache Breakers)
+    # Instructions, timestamps, and JSON data go here, safely at the bottom.
+    messages.append({
+        "role": "user", 
+        "content": f"INSTRUCTION: {task.instruction}\n\nVAULT DATA: {json.dumps(agent_specific_data)}"
+    })
     
     eval_retries = 0
     worker_final_output = ""
-    
+        
     # --- OUTER LOOP: EVALUATOR REFLECTION ---
     while eval_retries < MAX_EVAL_RETRIES:
         tool_iters = 0

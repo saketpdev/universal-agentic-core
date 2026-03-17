@@ -20,13 +20,19 @@ def _get_openai_client(base_url: str, api_key: str) -> OpenAI:
 def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str) -> StandardLLMResponse:
     """Handles OpenAI, Groq, DeepSeek, vLLM, and any OpenAI-compatible API."""
     client = _get_openai_client(config["base_url"], api_key)
-    
+
+    # Strip internal 'cache_control' flags so the strict OpenAI SDK doesn't crash
+    clean_messages = []
+    for m in messages:
+        clean_msg = {k: v for k, v in m.items() if k != "cache_control"}
+        clean_messages.append(clean_msg)
+
     kwargs = {
         "model": config["model"],
-        "messages": messages,
+        "messages": clean_messages,
         "temperature": config.get("default_temp", 0.1)
     }
-    
+
     if tools:
         kwargs["tools"] = tools
 
@@ -66,13 +72,34 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
     )
 
 def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str) -> StandardLLMResponse:
-    """
-    Placeholder adapter for Anthropic Claude.
-    To implement: import anthropic, translate 'messages' roles, and map 'content_blocks'.
-    """
-    logger.info("Anthropic adapter triggered (Implementation pending anthropic SDK install).")
-    # You will implement the Anthropic SDK mapping here, returning a StandardLLMResponse.
-    raise NotImplementedError("Anthropic execution branch is configured but requires SDK logic.")
+    """Handles Anthropic Claude. Uses Explicit Ephemeral Caching."""
+    logger.info("Anthropic adapter triggered. Translating Explicit Cache markers...")
+    
+    system_prompt = ""
+    anthropic_messages = []
+    
+    for m in messages:
+        if m["role"] == "system":
+            # Anthropic handles the System Prompt completely separately from the messages array
+            if m.get("cache_control"):
+                # 🚨 ANTHROPIC EXPLICIT CACHE INJECTION 🚨
+                system_prompt = [
+                    {
+                        "type": "text", 
+                        "text": m["content"], 
+                        "cache_control": {"type": "ephemeral"}
+                    }
+                ]
+            else:
+                system_prompt = m["content"]
+        else:
+            # Strip internal flags for standard messages
+            clean_msg = {k: v for k, v in m.items() if k != "cache_control"}
+            anthropic_messages.append(clean_msg)
+
+    # Here is where you will eventually call the Anthropic SDK:
+    # client.messages.create(system=system_prompt, messages=anthropic_messages, ...)
+    raise NotImplementedError("Anthropic message translation complete, but SDK execution is pending.")
 
 def call_llm(
     messages: List[Dict], 
