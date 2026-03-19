@@ -1,3 +1,5 @@
+import json
+import time
 import redis
 import uuid
 import logging
@@ -38,13 +40,13 @@ class FinOpsLedger:
         """The Pre-Flight Check. Reserves funds before the DAG starts."""
         tenant_id = self._get_current_tenant()
         current_balance = self.get_balance()
-        
+
         if current_balance < max_budget_usd:
             raise BudgetExceededException(
                 f"FinOps Rejected: Tenant {tenant_id} balance (${current_balance:.2f}) "
                 f"is below the required workflow deposit (${max_budget_usd:.2f})."
             )
-            
+
         self.redis.incrbyfloat(f"ledger:{tenant_id}:balance", -max_budget_usd)
         self.redis.set(f"escrow:{trace_id}", max_budget_usd)
         logger.info(f"FinOps: Reserved ${max_budget_usd:.2f} deposit for trace {trace_id}")
@@ -53,10 +55,10 @@ class FinOpsLedger:
         """The Circuit Breaker. Deducts micro-costs from the escrow."""
         if cost_usd <= 0:
             return
-            
+
         tenant_id = self._get_current_tenant()
         remaining = self.redis.incrbyfloat(f"escrow:{trace_id}", -cost_usd)
-        
+
         # 💥 THE HARD CIRCUIT BREAKER 💥
         if remaining <= 0:
             logger.error(f"FinOps: CIRCUIT BREAKER TRIPPED for tenant {tenant_id} on trace {trace_id}!")
@@ -66,13 +68,13 @@ class FinOpsLedger:
         """The Reconciliation. Refunds unspent escrow back to the ledger."""
         tenant_id = self._get_current_tenant()
         escrow_val = self.redis.get(f"escrow:{trace_id}")
-        
+
         if escrow_val:
             remaining = float(escrow_val)
             if remaining > 0:
                 self.redis.incrbyfloat(f"ledger:{tenant_id}:balance", remaining)
                 logger.info(f"FinOps: Workflow complete. Refunded ${remaining:.5f} to {tenant_id}")
-                
+
             self.redis.delete(f"escrow:{trace_id}")
 
 
@@ -91,6 +93,52 @@ class RedisIdempotencyRegistry:
     def save_idempotency(self, hash_key: str, result: str):
         redis_client.set(f"idem:{hash_key}", result, ex=86400) # 24 hour cache
 
-# Upgrade the initialized instances
+class RedisTaskQueue:
+    def __init__(self, redis_conn):
+        self.redis = redis_conn
+        self.queue_name = "agentic:task_queue"
+
+    def enqueue(self, thread_id: str):
+        """Pushes a workflow thread ID to the back of the queue."""
+        self.redis.lpush(self.queue_name, thread_id)
+        logger.info(f"Queue: Enqueued thread {thread_id} for background processing.")
+
+    def dequeue(self, timeout: int = 0) -> str:
+        """
+        Blocks and waits for a new task. 
+        Returns the thread_id, or None if timeout is reached.
+        """
+        result = self.redis.brpop(self.queue_name, timeout=timeout)
+        if result:
+            # result is a tuple: (queue_name, value)
+            return result[1]
+        return None
+
+class HumanReviewQueue:
+    def __init__(self, redis_conn):
+        self.redis = redis_conn
+        self.queue_name = "agentic:hrq"
+
+    def push(self, thread_id: str, status: str, message: str):
+        """Pushes a structured JSON payload to the unified Human Review Queue."""
+        payload = json.dumps({
+            "thread_id": thread_id,
+            "status": status,
+            "message": message,
+            "timestamp": time.time()
+        })
+        self.redis.lpush(self.queue_name, payload)
+        logger.info(f"HRQ: Pushed thread {thread_id} for human review (Status: {status}).")
+
+    def get_all_pending(self) -> list:
+        """Utility for your future Admin API to fetch the whole inbox."""
+        # LRANGE 0 -1 gets all items without deleting them from the queue
+        raw_items = self.redis.lrange(self.queue_name, 0, -1)
+        return [json.loads(item) for item in raw_items]
+
+# Initializing instances
 budget_manager = FinOpsLedger(redis_client)
+task_queue = RedisTaskQueue(redis_client)
+hrq = HumanReviewQueue(redis_client)
+
 db = RedisIdempotencyRegistry()

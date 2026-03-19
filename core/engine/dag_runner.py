@@ -6,6 +6,7 @@ from core.infrastructure import budget_manager, BudgetExceededException
 from core.engine.state_manager import initialize_or_resume_state, checkpoint_state
 from core.engine.node_executor import execute_worker_node
 from core.planner import generate_execution_plan
+from core.memory import session_manager
 from core.telemetry import TelemetryLogger
 
 logger = logging.getLogger("AgenticCore.DAGRunner")
@@ -42,6 +43,31 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
                 thread_id=request.thread_id
             )
             
+            # --- SWARM ROUTING LOGIC ---
+            if success and isinstance(output, str) and output.startswith("__YIELD__"):
+                target_agent = output.split("__YIELD__")[1]
+                
+                # 1. Mark current task as successfully yielded
+                current_task.status = "yielded"
+                briefcase.domain_state[current_task.agent_target] = {"status": "yielded to another agent"}
+                
+                # 2. Create the dynamic new task
+                new_task = SubTask(
+                    agent_target=target_agent,
+                    instruction=f"CONTINUE WORKFLOW. Context: {briefcase.domain_state.get('handoff_context', '')}",
+                    status="pending"
+                )
+                
+                # 3. Inject it into the master plan right after the current step
+                briefcase.execution_plan.insert(briefcase.current_step_index + 1, new_task)
+                
+                # 4. Checkpoint the new DAG to the Database
+                session_manager.save_briefcase(request.thread_id, request.user_id, briefcase)
+                
+                # Move the pointer forward and loop again to trigger the new agent
+                briefcase.current_step_index += 1
+                continue
+
             if not success:
                 current_task.status = "failed"
                 briefcase.has_critical_error = True

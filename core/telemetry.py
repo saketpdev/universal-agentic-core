@@ -85,7 +85,7 @@ class TelemetryLogger:
             trace_id=self.trace_id,
             sequence_id=self._get_sequence_id(),
             agent_id=agent_id,
-            model_tier=tier,
+            llm_tier=tier,
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
             total_tokens=total,

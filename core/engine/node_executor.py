@@ -53,7 +53,7 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
         # --- INNER LOOP: REACT & TOOLS ---
         while tool_iters < MAX_TOOL_ITERS:
             # 1. Fetch Provider-Agnostic Response
-            response: StandardLLMResponse = call_llm(messages, tools=LLM_TOOLS, tier="worker")
+            response: StandardLLMResponse = call_llm(messages, tools=LLM_TOOLS, tier="worker", trace_id=thread_id)
             
             # 2. FINOPS: BURN DOWN THE LEDGER
             if response.usage and response.usage.total_cost_usd > 0:
@@ -67,9 +67,9 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
                     agent_id=task.agent_target, 
                     tier="worker", 
                     prompt_tokens=response.usage.prompt_tokens, 
-                    completion_tokens=response.usage.completion_tokens
+                    completion_tokens=response.usage.completion_tokens,
                     cost_usd=response.usage.total_cost_usd
-
+                )
             safe_content = response.content or ""
             
             # 4. Log Decision (The internal monologue)
@@ -93,6 +93,33 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
                 ]
             
             messages.append(assistant_msg)
+
+            # --- NEW: SWARM INTERCEPTOR ---
+            if response.tool_calls:
+                for tc in response.tool_calls:
+                    if tc.function_name == "transfer_to_agent":
+                        try:
+                            # Safely parse arguments
+                            args = json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
+                        except json.JSONDecodeError:
+                            args = {}
+                            
+                        target = args.get("target_agent", "unknown")
+                        # Fixed: Looking for 'reason' to match the LLM_TOOLS schema
+                        reason = args.get("reason", "No reason provided.") 
+                        
+                        # INTEGRATING WITH TELEMETRY ENGINE
+                        telemetry.log_decision(
+                            agent_id=task.agent_target,
+                            reasoning=f"Yielding to {target}. Reason: {reason}",
+                            context="Swarm Handoff Routing"
+                        )
+                        
+                        # Save the context into the Briefcase for the next agent
+                        briefcase.domain_state["handoff_context"] = reason
+                        
+                        # Gracefully terminate this node's ReAct loop
+                        return True, f"__YIELD__{target}"
             
             # 6. Break if no tools are requested (Agent is done)
             if not response.tool_calls:

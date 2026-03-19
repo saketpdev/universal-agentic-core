@@ -43,7 +43,7 @@ class StateEvent(BaseEvent):
 
 class MetricEvent(BaseEvent):
     event_type: EventType = EventType.METRIC
-    model_tier: str
+    llm_tier: str
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int

@@ -1,57 +1,88 @@
-import sqlite3
-import json
-import logging
 import os
-from typing import Dict, Optional
+import logging
+from typing import Optional
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from models.state import SharedBriefcase
+from models.db_models import Base, ThreadRecord, StepLogRecord, HumanReviewRecord
 
 logger = logging.getLogger("AgenticCore.Memory")
 
+# Keep your original DB path logic
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "sessions.db")
+DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-def init_db():
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS threads (
-            thread_id TEXT PRIMARY KEY,
-            user_id TEXT,
-            state_data TEXT,
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    ''')
-    conn.commit()
-    conn.close()
+# SQLAlchemy Setup
+engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-def load_history(thread_id: str) -> Optional[Dict]:
-    """Loads the saved Briefcase state. Returns None if new thread."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT state_data FROM threads WHERE thread_id = ?", (thread_id,))
-    row = cursor.fetchone()
-    conn.close()
-    
-    if row:
-        logger.info(f"Memory: Restored existing Briefcase for thread '{thread_id}'")
-        return json.loads(row[0])
-    
-    logger.info(f"Memory: No existing state for thread '{thread_id}'")
-    return None
+class SessionManager:
+    def __init__(self):
+        self._init_db()
 
-def save_history(thread_id: str, user_id: str, state_data: Dict):
-    """Upserts the current Briefcase state into SQLite."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    state_json = json.dumps(state_data)
-    
-    cursor.execute('''
-        INSERT INTO threads (thread_id, user_id, state_data)
-        VALUES (?, ?, ?)
-        ON CONFLICT(thread_id) DO UPDATE SET 
-            state_data = excluded.state_data,
-            updated_at = CURRENT_TIMESTAMP
-    ''', (thread_id, user_id, state_json))
-    
-    conn.commit()
-    conn.close()
+    def _init_db(self):
+        """Bootstraps the new SQLAlchemy Schema safely."""
+        Base.metadata.create_all(bind=engine)
+        logger.info("Memory: SQLAlchemy DB Schema initialized.")
 
-init_db()
+    def get_briefcase(self, thread_id: str) -> Optional[SharedBriefcase]:
+        """Wakes up the Briefcase from the database."""
+        with SessionLocal() as db:
+            record = db.query(ThreadRecord).filter(ThreadRecord.thread_id == thread_id).first()
+            if record:
+                logger.info(f"Memory: Restored existing Briefcase for thread '{thread_id}'")
+                return SharedBriefcase.model_validate_json(record.briefcase_json)
+            
+            logger.info(f"Memory: No existing state for thread '{thread_id}'")
+            return None
+
+    def save_briefcase(self, thread_id: str, user_id: str, briefcase: SharedBriefcase, status: str = "RUNNING"):
+        """Persists the Pydantic Briefcase."""
+        with SessionLocal() as db:
+            record = db.query(ThreadRecord).filter(ThreadRecord.thread_id == thread_id).first()
+            
+            if record:
+                # Update existing (Replicates your ON CONFLICT DO UPDATE)
+                record.briefcase_json = briefcase.model_dump_json()
+                record.status = status
+            else:
+                # Insert new
+                new_thread = ThreadRecord(
+                    thread_id=thread_id,
+                    user_id=user_id,
+                    status=status,
+                    briefcase_json=briefcase.model_dump_json()
+                )
+                db.add(new_thread)
+                
+            db.commit()
+
+    def log_raw_output(self, thread_id: str, step_index: int, agent_id: str, raw_output: str, cost_usd: float = 0.0):
+        """THE VAULT: Saves the massive token outputs strictly for humans/dashboards."""
+        with SessionLocal() as db:
+            log_entry = StepLogRecord(
+                thread_id=thread_id,
+                step_index=step_index,
+                agent_id=agent_id,
+                raw_output=raw_output,
+                cost_usd=cost_usd
+            )
+            db.add(log_entry)
+            db.commit()
+
+    def create_review_ticket(self, thread_id: str, review_type: str, message: str):
+        with SessionLocal() as db:
+            ticket = HumanReviewRecord(
+                thread_id=thread_id,
+                review_type=review_type,
+                message=message
+            )
+            # Pause the main thread's status so the user knows it's waiting
+            db.query(ThreadRecord).filter(ThreadRecord.thread_id == thread_id).update({"status": "PAUSED_FOR_REVIEW"})
+
+            db.add(ticket)
+            db.commit()
+
+# Export the singleton instance
+session_manager = SessionManager()

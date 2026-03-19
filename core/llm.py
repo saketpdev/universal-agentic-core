@@ -1,14 +1,27 @@
 import os
 import logging
 from typing import List, Dict, Any, Optional
+from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
 from openai import OpenAI
 from dotenv import load_dotenv
 
 from core.model_registry import MODEL_REGISTRY
 from models.llm_schemas import StandardLLMResponse, StandardToolCall, StandardTokenUsage
+from core.telemetry import TelemetryLogger
 
 logger = logging.getLogger("AgenticCore.LLM")
 load_dotenv()
+
+# --- TRANSIENT ERROR LOGIC ---
+class TransientAPIError(Exception):
+    """Raised specifically for 429 Rate Limits or 5xx Server Errors."""
+    pass
+
+def _is_transient(exception: Exception) -> bool:
+    """Helper to decide if we should retry based on the error message."""
+    err_str = str(exception).lower()
+    return any(keyword in err_str for keyword in ["rate limit", "429", "502", "503", "504", "timeout", "connection reset"])
+# ----------------------------------
 
 _openai_clients = {}
 
@@ -80,9 +93,7 @@ def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[
     
     for m in messages:
         if m["role"] == "system":
-            # Anthropic handles the System Prompt completely separately from the messages array
             if m.get("cache_control"):
-                # 🚨 ANTHROPIC EXPLICIT CACHE INJECTION 🚨
                 system_prompt = [
                     {
                         "type": "text", 
@@ -93,19 +104,24 @@ def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[
             else:
                 system_prompt = m["content"]
         else:
-            # Strip internal flags for standard messages
             clean_msg = {k: v for k, v in m.items() if k != "cache_control"}
             anthropic_messages.append(clean_msg)
 
-    # Here is where you will eventually call the Anthropic SDK:
-    # client.messages.create(system=system_prompt, messages=anthropic_messages, ...)
     raise NotImplementedError("Anthropic message translation complete, but SDK execution is pending.")
 
+# 🚀 The Tenacity Decorator: for exponential backoff
+@retry(
+    wait=wait_exponential(multiplier=1, min=2, max=10), # Waits 2s, 4s, 8s, 10s...
+    stop=stop_after_attempt(5),
+    retry=retry_if_exception_type(TransientAPIError),
+    reraise=True
+)
 def call_llm(
     messages: List[Dict], 
     tools: Optional[List[Dict]] = None, 
     response_schema: Optional[Dict] = None,
-    tier: str = "worker"
+    tier: str = "worker",
+    trace_id: Optional[str] = None # <-- Added to support tracing
 ) -> StandardLLMResponse:
     """The Universal Gateway: Routes requests based on provider strategy."""
     
@@ -132,7 +148,6 @@ def call_llm(
             
         # 2. FINOPS MATH: Calculate actual USD cost
         if response.usage:
-            # Divide by 1,000,000 to get the multiplier, then multiply by the registry price
             p_cost = (response.usage.prompt_tokens / 1_000_000.0) * config.get("input_cost_per_m", 0.0)
             c_cost = (response.usage.completion_tokens / 1_000_000.0) * config.get("output_cost_per_m", 0.0)
             
@@ -143,5 +158,24 @@ def call_llm(
         return response
             
     except Exception as e:
-        logger.error(f"LLM Gateway Execution Failed on tier '{tier}': {str(e)}")
-        raise e
+        # 3. TELEMETRY & RETRY ROUTING
+        if _is_transient(e):
+            logger.warning(f"LLM Transient Error ({tier}): {str(e)}. Tenacity will backoff and retry...")
+            if trace_id:
+                telemetry = TelemetryLogger(trace_id=trace_id)
+                telemetry.log_decision(
+                    agent_id=f"llm_gateway_{tier}",
+                    reasoning=f"Transient API error: {str(e)}. Triggering exponential backoff.",
+                    context="Transient Failure Retry"
+                )
+            raise TransientAPIError(f"Network/Rate Limit: {str(e)}")
+        else:
+            logger.error(f"LLM Fatal Execution Failed on tier '{tier}': {str(e)}")
+            if trace_id:
+                telemetry = TelemetryLogger(trace_id=trace_id)
+                telemetry.log_decision(
+                    agent_id=f"llm_gateway_{tier}",
+                    reasoning=f"Terminal API error: {str(e)}. Aborting LLM call.",
+                    context="Terminal LLM Failure"
+                )
+            raise e # Instantly kills the run (e.g., bad API key, invalid schema)

@@ -90,3 +90,16 @@ def execute_secure_tool(name: str, args: str) -> str:
         return TOOL_REGISTRY[name](args_dict)
     except Exception as e:
         return json.dumps({"error": "ExecutionFailed", "message": str(e)})
+
+def transfer_to_agent(target_agent: str, reason: str) -> str:
+    """
+    Use this tool to yield execution to a different specialized agent if the current task 
+    is outside your domain of expertise.
+    
+    Args:
+        target_agent: The exact string name of the agent to route to (e.g., "legal_agent", "database_agent").
+        reason: A brief explanation of why you are transferring this task and what the next agent should do.
+    """
+    # This string is technically never returned to the LLM, because the orchestrator 
+    # intercepts the call and terminates the loop first.
+    return f"TRANSFER_SIGNAL_INITIATED:{target_agent}:{reason}"
