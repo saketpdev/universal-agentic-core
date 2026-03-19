@@ -1,7 +1,24 @@
-fastapi==0.110.0
-uvicorn==0.29.0
-pydantic==2.6.3
-openai==1.13.3
-redis==5.0.3
-python-dotenv==1.0.1
-httpx==0.27.2
+# --- API & Web Server ---
+fastapi>=0.103.0        # The core web framework
+uvicorn>=0.23.2         # ASGI server to run FastAPI
+
+# --- Data Validation & Schemas ---
+pydantic>=2.4.2         # V2 is required for model_config and ConfigDict
+
+# --- Database & Memory ---
+SQLAlchemy>=2.0.20      # ORM for the SQLite State Machine & Human Review Queue
+# Note: sqlite3 is built into standard Python, no pip install needed.
+
+# --- Asynchronous Queue & State ---
+redis>=5.0.0            # Client for the Redis Task Queue and FinOps Ledger
+
+# --- LLM Integration & Resilience ---
+openai>=1.12.0          # Used for Groq, DeepSeek, vLLM, and OpenAI routing
+tenacity>=8.2.3         # The exponential backoff engine for transient network errors
+
+# --- Environment Management ---
+python-dotenv>=1.0.0    # To load the .env file for API keys
+
+# --- Observability & Telemetry ---
+opentelemetry-api>=1.20.0  # Core OpenTelemetry tracing API
+opentelemetry-sdk>=1.20.0  # OpenTelemetry SDK (Console Exporter / Batch Processor)

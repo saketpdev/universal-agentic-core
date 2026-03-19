@@ -35,7 +35,7 @@ The system is decoupled into three primary layers for horizontal scalability:
 3. **Install the dependencies:**
 
    ```bash
-   pip install fastapi uvicorn pydantic sqlalchemy redis tenacity openai python-dotenv opentelemetry-api opentelemetry-sdk
+   pip install -r requirements.txt
    ```
 
 4. **Environment Variables:**
