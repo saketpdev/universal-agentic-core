@@ -21,7 +21,7 @@ The system is decoupled into three primary layers for horizontal scalability:
 1. **Clone the repository and enter the directory:**
 
    ```bash
-   git clone <your-repo-url>
+   git clone git@github.com:saketpdev/universal-agentic-core.git
    cd universal-agentic-core
    ```
 
