@@ -1,0 +1,7 @@
+name: "planner"
+description: "The master orchestrator. Breaks down user requests into a strict Directed Acyclic Graph (DAG) of sub-tasks."
+llm_tier: "reasoning"
+temperature: 0.1
+# The Planner is the Supervisor, so it doesn't need handoff tools.
+# It creates the DAG for others to execute.
+allowed_handoffs: []

@@ -4,16 +4,19 @@ import uuid
 import logging
 from typing import Tuple
 
-from models.state import SubTask, SharedBriefcase
 from core.llm import call_llm
 from core.infrastructure import db, budget_manager
 from core.security import asymmetric_action_gate
-from tools.registry import execute_secure_tool, LLM_TOOLS
-from skills.orchestrator import get_agent_context
+from core.agents.agent_registry import swarm_registry
 from core.evaluator import run_dynamic_evaluation
 from core.telemetry import TelemetryLogger
+
+from models.state import SubTask, SharedBriefcase
 from models.telemetry import ActionStatus
 from models.llm_schemas import StandardLLMResponse
+
+from tools.registry import execute_secure_tool, LLM_TOOLS
+
 
 logger = logging.getLogger("AgenticCore.NodeExecutor")
 
@@ -22,20 +25,25 @@ MAX_TOOL_ITERS = 5
 
 def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: str) -> Tuple[bool, str]:
     telemetry = TelemetryLogger(trace_id=thread_id)
-    current_skill = get_agent_context(task.agent_target)
+    
+    # 2. PULL FROM THE YAML REGISTRY
+    agent_def = swarm_registry.get_agent(task.agent_target)
+    
     agent_specific_data = briefcase.domain_state.get(task.agent_target, {})
     
-    # 1. THE STATIC PREFIX (Highly Cacheable)
-    # This must be the EXACT same string every time this agent runs.
-    # We flag it so our gateway knows to explicitly cache this block for Anthropic.
+    # 3. BUILD THE DYNAMIC PROMPT
+    # (If your prompt builder requires args like user_id, pass them here)
+    system_prompt = agent_def.system_prompt_builder() 
+    
+    # 4. THE STATIC PREFIX (Highly Cacheable)
     messages = [
         {
             "role": "system", 
-            "content": current_skill["generator_prompt"],
+            "content": system_prompt,
             "cache_control": True
         }
     ]
-    
+        
     # 2. THE DYNAMIC PAYLOAD (The Cache Breakers)
     # Instructions, timestamps, and JSON data go here, safely at the bottom.
     messages.append({
@@ -53,8 +61,13 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
         # --- INNER LOOP: REACT & TOOLS ---
         while tool_iters < MAX_TOOL_ITERS:
             # 1. Fetch Provider-Agnostic Response
-            response: StandardLLMResponse = call_llm(messages, tools=LLM_TOOLS, tier="worker", trace_id=thread_id)
-            
+            response: StandardLLMResponse = call_llm(
+                        messages=messages,
+                        tier=agent_def.config.llm_tier,            # <-- Pulled from config.yaml
+                        temperature=agent_def.config.temperature,  # <-- Pulled from config.yaml
+                        tools=allowed_tools,                       # (We will filter this via MCP next!)
+                        trace_id=thread_id                         # <-- Crucial for OTel stitching!
+                    )            
             # 2. FINOPS: BURN DOWN THE LEDGER
             if response.usage and response.usage.total_cost_usd > 0:
                 # If this call pushes the escrow below zero, it will raise BudgetExceededException
