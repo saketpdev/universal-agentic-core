@@ -139,7 +139,7 @@ def call_llm(
     # If temperature isn't explicitly passed via YAML/kwargs, fallback to model config
     validated_temperature: float = float(temperature if temperature is not None else config.get("default_temp", 0.1))
 
-    logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']} (Temp: {temperature})")
+    logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']} (Temp: {validated_temperature})")
 
     try:
         # 1. Execute Strategy Pattern Routing

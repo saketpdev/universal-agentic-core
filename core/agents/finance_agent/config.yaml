@@ -1,7 +1,7 @@
 name: "finance_agent"
-description: "The master orchestrator. Breaks down user requests into a DAG."
-llm_tier: "reasoning"
+description: "Handles invoice extraction, financial validation, and ledger arithmetic."
+llm_tier: "worker"
 temperature: 0.1
-allowed_handoffs: []
+allowed_handoffs: ["customer_support"]
 evaluator_rubric: "Check the ledger arithmetic."
-evaluator_schema_name: "finance" # Pydantic Evaluation Model class name to load
+evaluator_schema_name: "finance"

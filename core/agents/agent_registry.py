@@ -76,3 +76,6 @@ swarm_registry.register("planner", planner_prompt)
 
 from core.agents.evaluator.prompts import build_system_prompt as evaluator_prompt
 swarm_registry.register("evaluator", evaluator_prompt)
+
+from core.agents.finance_agent.prompts import build_system_prompt as finance_prompt
+swarm_registry.register("finance_agent", finance_prompt)

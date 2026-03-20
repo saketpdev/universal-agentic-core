@@ -16,6 +16,9 @@ redis>=5.0.0            # Client for the Redis Task Queue and FinOps Ledger
 openai>=1.12.0          # Used for Groq, DeepSeek, vLLM, and OpenAI routing
 tenacity>=8.2.3         # The exponential backoff engine for transient network errors
 
+# --- Config ---
+PyYAML>=6.0.1
+
 # --- Environment Management ---
 python-dotenv>=1.0.0    # To load the .env file for API keys
 

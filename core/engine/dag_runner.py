@@ -5,7 +5,7 @@ from models.state import AgentRequest, AgentResponse, SubTask
 from core.infrastructure import budget_manager, BudgetExceededException
 from core.engine.state_manager import initialize_or_resume_state, checkpoint_state
 from core.engine.node_executor import execute_worker_node
-from core.planner import generate_execution_plan
+from core.planner import generate_dag
 from core.memory import session_manager
 from core.telemetry import TelemetryLogger
 
@@ -23,7 +23,8 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
         briefcase = initialize_or_resume_state(request)
 
         if not briefcase.execution_plan:
-            briefcase.execution_plan = generate_execution_plan(request.user_prompt)
+            plan = generate_dag(request)
+            briefcase.execution_plan = plan.tasks
             telemetry.log_decision("planner", f"Generated {len(briefcase.execution_plan)} SubTasks.", context="DAG Generation")
             checkpoint_state(briefcase, request)
 

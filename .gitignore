@@ -3,3 +3,5 @@ pycache/
 *.pyc
 .env
 .DS_Store
+sessions.db
+.vscode
