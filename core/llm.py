@@ -87,10 +87,10 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
 def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     """Handles Anthropic Claude. Uses Explicit Ephemeral Caching."""
     logger.info("Anthropic adapter triggered. Translating Explicit Cache markers...")
-    
+
     system_prompt = ""
     anthropic_messages = []
-    
+
     for m in messages:
         if m["role"] == "system":
             if m.get("cache_control"):
@@ -125,43 +125,42 @@ def call_llm(
     temperature: Optional[float] = None  # <-- NEW PARAMETER ADDED
 ) -> StandardLLMResponse:
     """The Universal Gateway: Routes requests based on provider strategy."""
-    
+
     if tier not in MODEL_REGISTRY:
         logger.warning(f"Tier '{tier}' not found. Falling back to 'worker'.")
         tier = "worker"
-        
+
     config = MODEL_REGISTRY[tier]
     api_key = os.environ.get(config["api_key_env"])
-    
+
     if not api_key:
         raise ValueError(f"CRITICAL: Missing API key for tier '{tier}'.")
 
     # If temperature isn't explicitly passed via YAML/kwargs, fallback to model config
-    if temperature is None:
-        temperature = config.get("default_temp", 0.1)
+    validated_temperature: float = float(temperature if temperature is not None else config.get("default_temp", 0.1))
 
     logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']} (Temp: {temperature})")
 
     try:
         # 1. Execute Strategy Pattern Routing
         if config["provider"] in ["openai", "groq", "vllm", "deepseek"]:
-            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key, temperature)
+            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key, validated_temperature)
         elif config["provider"] == "anthropic":
-            response = _execute_anthropic(config, messages, tools, response_schema, api_key, temperature)
+            response = _execute_anthropic(config, messages, tools, response_schema, api_key, validated_temperature)
         else:
             raise ValueError(f"Unsupported provider: {config['provider']}")
-            
+
         # 2. FINOPS MATH: Calculate actual USD cost
         if response.usage:
             p_cost = (response.usage.prompt_tokens / 1_000_000.0) * config.get("input_cost_per_m", 0.0)
             c_cost = (response.usage.completion_tokens / 1_000_000.0) * config.get("output_cost_per_m", 0.0)
-            
+
             response.usage.prompt_cost_usd = p_cost
             response.usage.completion_cost_usd = c_cost
             response.usage.total_cost_usd = p_cost + c_cost
-            
+
         return response
-            
+
     except Exception as e:
         # 3. TELEMETRY & RETRY ROUTING
         if _is_transient(e):
