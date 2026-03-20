@@ -2,7 +2,7 @@ import json
 import time
 import uuid
 import logging
-from typing import Tuple
+from typing import Any, Dict, Optional, Tuple, cast
 
 from core.llm import call_llm
 from core.infrastructure import db, budget_manager
@@ -51,6 +51,7 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
 
     eval_retries = 0
     worker_final_output = ""
+    evaluation: Optional[BaseEvaluationSchema] = None
 
     # --- OUTER LOOP: EVALUATOR REFLECTION ---
     while eval_retries < MAX_EVAL_RETRIES:
@@ -91,7 +92,7 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
                 )
 
             # 5. Clean Tool Array Builder
-            assistant_msg = {"role": "assistant", "content": safe_content}
+            assistant_msg: Dict[str, Any] = {"role": "assistant", "content": safe_content}
             if response.tool_calls:
                 assistant_msg["tool_calls"] = [
                     {
@@ -216,4 +217,6 @@ def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: st
         })
         eval_retries += 1
 
-    return False, f"Task Failed after {MAX_EVAL_RETRIES} QA attempts. Final Critique: {evaluation.critique}"
+    # After the while loop finishes:
+    final_critique = evaluation.critique if evaluation else "Maximum evaluation retries exceeded."
+    return False, f"Task Failed after {MAX_EVAL_RETRIES} QA attempts. Final Critique: {final_critique}"

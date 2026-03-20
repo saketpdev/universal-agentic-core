@@ -32,7 +32,7 @@ class SessionManager:
             record = db.query(ThreadRecord).filter(ThreadRecord.thread_id == thread_id).first()
             if record:
                 logger.info(f"Memory: Restored existing Briefcase for thread '{thread_id}'")
-                return SharedBriefcase.model_validate_json(record.briefcase_json)
+                return SharedBriefcase.model_validate_json(record.briefcase_json) # type: ignore
             
             logger.info(f"Memory: No existing state for thread '{thread_id}'")
             return None
@@ -44,8 +44,8 @@ class SessionManager:
             
             if record:
                 # Update existing (Replicates your ON CONFLICT DO UPDATE)
-                record.briefcase_json = briefcase.model_dump_json()
-                record.status = status
+                record.briefcase_json = briefcase.model_dump_json() # type: ignore
+                record.status = status # type: ignore
             else:
                 # Insert new
                 new_thread = ThreadRecord(

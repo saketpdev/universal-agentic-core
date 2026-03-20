@@ -1,4 +1,5 @@
 import json
+from typing import Any, cast
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, ConsoleSpanExporter
@@ -25,7 +26,8 @@ class TelemetryLogger:
 
     def _get_sequence_id(self) -> int:
         try:
-            return redis_client.incr("telemetry:global_sequence_id")
+            raw_val = redis_client.incr("telemetry:global_sequence_id")
+            return int(cast(Any, raw_val) or 0)
         except Exception:
             return 0
 
@@ -40,7 +42,7 @@ class TelemetryLogger:
                 attributes={"payload": event_model.model_dump_json()}
             )
 
-    def log_decision(self, agent_id: str, reasoning: str, context: str = None):
+    def log_decision(self, agent_id: str, reasoning: str, context: str = ''):
         event = DecisionEvent(
             trace_id=self.trace_id,
             sequence_id=self._get_sequence_id(),
@@ -51,8 +53,8 @@ class TelemetryLogger:
         self._record_otel_event(f"{agent_id}.decision", event, {"agent.id": agent_id})
 
     def log_action(self, agent_id: str, correlation_id: str, tool_name: str, 
-                   arguments: str, status: ActionStatus, latency_ms: float = None, 
-                   result_summary: str = None):
+                   arguments: str, status: ActionStatus, latency_ms: float = 0.0, 
+                   result_summary: str = ''):
         event = ActionEvent(
             trace_id=self.trace_id,
             sequence_id=self._get_sequence_id(),

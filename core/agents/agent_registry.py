@@ -11,7 +11,7 @@ from models.evaluations.compliance import ComplianceEvaluationSchema
 
 logger = logging.getLogger("AgenticCore.Registry")
 
-SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
+SCHEMA_MAP: Dict[str, Type[BaseEvaluationSchema]] = {
     "base": BaseEvaluationSchema,
     "finance": FinanceEvaluationSchema,
     "compliance": ComplianceEvaluationSchema
@@ -32,7 +32,7 @@ class AgentDefinition(BaseModel):
     config: AgentConfig
     system_prompt_builder: Callable[..., str] # Enforces that it must be a function returning a string
     @property
-    def get_evaluation_schema(self) -> Type[BaseModel]:
+    def get_evaluation_schema(self) -> Type[BaseEvaluationSchema]:
         return SCHEMA_MAP.get(self.config.evaluator_schema_name, BaseEvaluationSchema)
 
 class AgentRegistryManager:
@@ -42,7 +42,7 @@ class AgentRegistryManager:
     def register(self, agent_dir_name: str, prompt_builder: Callable[..., str]):
         """Reads the YAML and pairs it with the Python prompt builder."""
         config_path = Path(f"core/agents/{agent_dir_name}/config.yaml")
-        
+
         if not config_path.exists():
             raise FileNotFoundError(f"CRITICAL: Missing config.yaml for agent: {agent_dir_name}")
 

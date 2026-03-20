@@ -1,5 +1,6 @@
 import json
 import time
+from typing import Any, Optional, cast
 import redis
 import uuid
 import logging
@@ -85,10 +86,16 @@ class RedisIdempotencyRegistry:
         return hashlib.md5(raw_string.encode()).hexdigest()
 
     def check_idempotency(self, hash_key: str) -> bool:
-        return redis_client.exists(f"idem:{hash_key}") > 0
 
-    def get_result(self, hash_key: str) -> str:
-        return redis_client.get(f"idem:{hash_key}")
+        int_val = int(cast(Any, redis_client.exists(f"idem:{hash_key}")) or 0)
+        return  int_val > 0
+
+    def get_result(self, hash_key: str)-> Optional[str]:
+        result = redis_client.get(f"idem:{hash_key}")
+        if result is None:
+            return None
+        # If it's bytes, decode it
+        return result.decode("utf-8") if isinstance(result, bytes) else str(result)
 
     def save_idempotency(self, hash_key: str, result: str):
         redis_client.set(f"idem:{hash_key}", result, ex=86400) # 24 hour cache
@@ -103,7 +110,7 @@ class RedisTaskQueue:
         self.redis.lpush(self.queue_name, thread_id)
         logger.info(f"Queue: Enqueued thread {thread_id} for background processing.")
 
-    def dequeue(self, timeout: int = 0) -> str:
+    def dequeue(self, timeout: int = 0) -> Optional[str]:
         """
         Blocks and waits for a new task. 
         Returns the thread_id, or None if timeout is reached.
@@ -114,31 +121,8 @@ class RedisTaskQueue:
             return result[1]
         return None
 
-class HumanReviewQueue:
-    def __init__(self, redis_conn):
-        self.redis = redis_conn
-        self.queue_name = "agentic:hrq"
-
-    def push(self, thread_id: str, status: str, message: str):
-        """Pushes a structured JSON payload to the unified Human Review Queue."""
-        payload = json.dumps({
-            "thread_id": thread_id,
-            "status": status,
-            "message": message,
-            "timestamp": time.time()
-        })
-        self.redis.lpush(self.queue_name, payload)
-        logger.info(f"HRQ: Pushed thread {thread_id} for human review (Status: {status}).")
-
-    def get_all_pending(self) -> list:
-        """Utility for your future Admin API to fetch the whole inbox."""
-        # LRANGE 0 -1 gets all items without deleting them from the queue
-        raw_items = self.redis.lrange(self.queue_name, 0, -1)
-        return [json.loads(item) for item in raw_items]
-
 # Initializing instances
 budget_manager = FinOpsLedger(redis_client)
 task_queue = RedisTaskQueue(redis_client)
-hrq = HumanReviewQueue(redis_client)
 
 db = RedisIdempotencyRegistry()

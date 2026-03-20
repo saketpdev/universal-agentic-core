@@ -1,5 +1,6 @@
 import json
 import logging
+from typing import Any, Dict, cast
 from models.state import SharedBriefcase, AgentRequest
 from core.memory import session_manager
 
@@ -9,7 +10,7 @@ def initialize_or_resume_state(request: AgentRequest) -> SharedBriefcase:
     """Strictly loads existing Briefcase or creates an empty one."""
     raw_history = session_manager.get_briefcase(request.thread_id)
     if raw_history:
-        briefcase = SharedBriefcase(**raw_history)
+        briefcase = SharedBriefcase(**cast(Dict[str, Any], raw_history))
         logger.info(f"[{request.thread_id}] Resuming at Step {briefcase.current_step_index}")
         return briefcase
 
