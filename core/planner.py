@@ -1,66 +1,65 @@
 import json
 import logging
 from typing import List
-from models.state import SubTask, ExecutionPlan
-from skills.orchestrator import load_registry
-from core.llm import call_llm  # Assuming your standard LLM call function
+
+from core.llm import call_llm
+from models.llm_schemas import StandardLLMResponse
+from models.state import AgentRequest, ExecutionPlan, SubTask
+from core.agents.agent_registry import swarm_registry
+from pydantic import BaseModel
 
 logger = logging.getLogger("AgenticCore.Planner")
 
-def generate_execution_plan(user_prompt: str) -> List[SubTask]:
-    """Reads the user prompt and generates a strict DAG execution array."""
-    logger.info("Planner: Deconstructing user prompt into execution graph.")
+class DAGSchema(BaseModel):
+    tasks: List[SubTask]
 
-    # 1. Dynamically load available agents from the registry
-    registry = load_registry()
-    agent_roster = []
+def generate_dag(request: AgentRequest) -> ExecutionPlan:
+    """Generates the DAG execution plan dynamically using the Declarative Swarm Registry."""
+    logger.info(f"[{request.thread_id}] Generating DAG...")
 
-    for agent_name, config in registry.items():
-        # We don't want the planner routing to itself or the old supervisor
-        if agent_name in ["supervisor", "planner"]: 
-            continue
+    planner_def = swarm_registry.get_agent("planner")
 
-        # Use the trigger keywords as a makeshift description for the Planner
-        keywords = ", ".join(config.get("trigger_keywords", []))
-        agent_roster.append(f"- **{agent_name}**: Best for handling: {keywords}")
+    # --- DYNAMIC ROSTER GENERATION ---
+    available_agents = []
+    for name, agent in swarm_registry.agents.items():
+        if name not in ["planner", "evaluator"]:
+            available_agents.append(f"- {name}: {agent.config.description}")
 
-    roster_string = "\n".join(agent_roster)
+    roster_string = "\n".join(available_agents)
 
-    # 2. Build the strict System Prompt
-    system_prompt = f"""# ROLE: Enterprise DAG Planner
-You are the Orchestrator for a multi-agent backend. The user will give you a complex request. Your job is to decompose it into a sequential Execution Plan.
+    system_prompt = planner_def.system_prompt_builder(roster_string=roster_string)
 
-## AVAILABLE WORKER AGENTS:
-{roster_string}
-
-## RULES:
-1. You must output a JSON object containing a `tasks` array.
-2. Every task must specify a valid `agent_target` from the available roster ONLY. Do not hallucinate agents.
-3. Every task must have a specific, narrow `instruction` for that agent.
-4. Sequence matters. If Task 2 depends on data from Task 1, order them correctly.
-5. If the user asks for something outside our capabilities, create a single task for 'customer_support' to handle the rejection.
-"""
+    schema_json = DAGSchema.model_json_schema()
 
     messages = [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": f"Deconstruct this request: {user_prompt}"}
+        {"role": "system", "content": system_prompt, "cache_control": True},
+        {"role": "user", "content": f"USER REQUEST: {request.user_prompt}"}
     ]
 
-    # 3. Call the LLM (Force JSON mode / Structured Output)
     try:
-        response = call_llm(
-            messages=messages, 
-            response_schema=ExecutionPlan.model_json_schema(),
-            tier="planner"  # Explicitly request the high-IQ model
+        response: StandardLLMResponse = call_llm(
+            messages=messages,
+            response_schema=schema_json,
+            tier=planner_def.config.llm_tier,
+            temperature=planner_def.config.temperature,
+            trace_id=request.thread_id
         )
-        # Parse the raw JSON string back into our Pydantic model
-        plan_data = json.loads(response.content)
-        validated_plan = ExecutionPlan(**plan_data)
 
-        logger.info(f"Planner successfully generated {len(validated_plan.tasks)} sub-tasks.")
-        return validated_plan.tasks
+        parsed_plan = json.loads(response.content)
+
+        return ExecutionPlan(
+            tasks=parsed_plan.get("tasks", [])
+        )
 
     except Exception as e:
-        logger.error(f"Planner failed to generate a valid DAG: {str(e)}")
-        # Fallback: Route to support if the planner crashes
-        return [SubTask(agent_target="customer_support", instruction="The orchestrator failed to parse the user's request. Please ask them to clarify.")]
+        logger.error(f"[{request.thread_id}] Planner failed to generate DAG: {e}")
+
+        return ExecutionPlan(
+            tasks=[
+                SubTask(
+                    agent_target="support_agent",
+                    instruction=f"The system failed to parse a complex plan for: '{request.user_prompt}'. Please assist the user generally.",
+                    status="pending"
+                )
+            ]
+        )

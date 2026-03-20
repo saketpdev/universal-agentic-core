@@ -1,7 +1,7 @@
 import json
 import logging
 import traceback
-from models.state import AgentRequest, AgentResponse
+from models.state import AgentRequest, AgentResponse, SubTask
 from core.infrastructure import budget_manager, BudgetExceededException
 from core.engine.state_manager import initialize_or_resume_state, checkpoint_state
 from core.engine.node_executor import execute_worker_node
