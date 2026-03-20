@@ -1,7 +1,7 @@
 from pydantic import Field
-from models.evaluations.base import BaseEvaluation
+from models.evaluations.base import BaseEvaluationSchema
 
-class FinanceEvaluation(BaseEvaluation):
+class FinanceEvaluationSchema(BaseEvaluationSchema):
     source_stated_total: float = Field(
         description="The total amount explicitly stated by the user in the ORIGINAL objective text."
     )

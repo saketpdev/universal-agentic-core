@@ -2,9 +2,20 @@ import yaml
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field
-from typing import List, Callable, Dict, Any
+from typing import List, Callable, Dict, Any, Optional, Type
+
+# custom evaluation schemas
+from models.evaluations.base import BaseEvaluationSchema
+from models.evaluations.finance import FinanceEvaluationSchema
+from models.evaluations.compliance import ComplianceEvaluationSchema
 
 logger = logging.getLogger("AgenticCore.Registry")
+
+SCHEMA_MAP: Dict[str, Type[BaseModel]] = {
+    "base": BaseEvaluationSchema,
+    "finance": FinanceEvaluationSchema,
+    "compliance": ComplianceEvaluationSchema
+}
 
 # 1. Strict Pydantic Schema for the YAML Configuration
 class AgentConfig(BaseModel):
@@ -13,11 +24,16 @@ class AgentConfig(BaseModel):
     llm_tier: str
     temperature: float = 0.1
     allowed_handoffs: List[str] = Field(default_factory=list)
+    evaluator_rubric: Optional[str] = None
+    evaluator_schema_name: str = "base" # defaults to "base" if left blank
 
 # 2. The unified representation of an Agent in memory
 class AgentDefinition(BaseModel):
     config: AgentConfig
     system_prompt_builder: Callable[..., str] # Enforces that it must be a function returning a string
+    @property
+    def get_evaluation_schema(self) -> Type[BaseModel]:
+        return SCHEMA_MAP.get(self.config.evaluator_schema_name, BaseEvaluationSchema)
 
 class AgentRegistryManager:
     def __init__(self):
@@ -56,7 +72,7 @@ swarm_registry = AgentRegistryManager()
 # We explicitly import the prompt builders here so IDEs and Linters can track them!
 
 from core.agents.planner.prompts import build_system_prompt as planner_prompt
-# from core.agents.researcher.prompts import build_system_prompt as researcher_prompt
-
 swarm_registry.register("planner", planner_prompt)
-# swarm_registry.register("researcher", researcher_prompt)
+
+from core.agents.evaluator.prompts import build_system_prompt as evaluator_prompt
+swarm_registry.register("evaluator", evaluator_prompt)

@@ -30,7 +30,7 @@ def _get_openai_client(base_url: str, api_key: str) -> OpenAI:
         _openai_clients[base_url] = OpenAI(base_url=base_url, api_key=api_key)
     return _openai_clients[base_url]
 
-def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str) -> StandardLLMResponse:
+def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     """Handles OpenAI, Groq, DeepSeek, vLLM, and any OpenAI-compatible API."""
     client = _get_openai_client(config["base_url"], api_key)
 
@@ -43,7 +43,7 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
     kwargs = {
         "model": config["model"],
         "messages": clean_messages,
-        "temperature": config.get("default_temp", 0.1)
+        "temperature": temperature  # <-- NOW DYNAMICALLY PASSED
     }
 
     if tools:
@@ -84,7 +84,7 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
         raw_provider_response=raw_msg
     )
 
-def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str) -> StandardLLMResponse:
+def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     """Handles Anthropic Claude. Uses Explicit Ephemeral Caching."""
     logger.info("Anthropic adapter triggered. Translating Explicit Cache markers...")
     
@@ -121,7 +121,8 @@ def call_llm(
     tools: Optional[List[Dict]] = None, 
     response_schema: Optional[Dict] = None,
     tier: str = "worker",
-    trace_id: Optional[str] = None # <-- Added to support tracing
+    trace_id: Optional[str] = None,
+    temperature: Optional[float] = None  # <-- NEW PARAMETER ADDED
 ) -> StandardLLMResponse:
     """The Universal Gateway: Routes requests based on provider strategy."""
     
@@ -135,14 +136,18 @@ def call_llm(
     if not api_key:
         raise ValueError(f"CRITICAL: Missing API key for tier '{tier}'.")
 
-    logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']}")
+    # If temperature isn't explicitly passed via YAML/kwargs, fallback to model config
+    if temperature is None:
+        temperature = config.get("default_temp", 0.1)
+
+    logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']} (Temp: {temperature})")
 
     try:
         # 1. Execute Strategy Pattern Routing
         if config["provider"] in ["openai", "groq", "vllm", "deepseek"]:
-            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key)
+            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key, temperature)
         elif config["provider"] == "anthropic":
-            response = _execute_anthropic(config, messages, tools, response_schema, api_key)
+            response = _execute_anthropic(config, messages, tools, response_schema, api_key, temperature)
         else:
             raise ValueError(f"Unsupported provider: {config['provider']}")
             
