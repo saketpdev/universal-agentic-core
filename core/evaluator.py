@@ -1,7 +1,6 @@
 import json
 import logging
 from typing import Type, Optional
-from pydantic import BaseModel
 
 from models.evaluations.base import BaseEvaluationSchema
 
@@ -10,21 +9,18 @@ from core.agents.agent_registry import swarm_registry
 
 logger = logging.getLogger("AgenticCore.Evaluator")
 
-def run_dynamic_evaluation(
+# 🚀 CHANGED TO ASYNC
+async def run_dynamic_evaluation(
     output_text: str,
     objective: str,
     evaluator_prompt: str,
-    schema_class: Type[BaseEvaluationSchema], # 🚀 FIXED: Now expects the Base class or its children
+    schema_class: Type[BaseEvaluationSchema],
     trace_id: Optional[str] = None
-) -> BaseEvaluationSchema:                      # 🚀 FIXED: Now guarantees returning the Base class
-    """A truly universal Judge routed through the Declarative Swarm Registry."""
+) -> BaseEvaluationSchema:
 
     schema_json = schema_class.model_json_schema()
-
-    # 1. Pull the Evaluator config from the Registry
     evaluator_def = swarm_registry.get_agent("evaluator")
 
-    # 2. Build the dynamic prompt
     system_prompt = evaluator_def.system_prompt_builder(
         rubric=evaluator_prompt,
         schema_json_str=json.dumps(schema_json)
@@ -38,8 +34,7 @@ def run_dynamic_evaluation(
     logger.info(f"Evaluator: Grading against {schema_class.__name__} schema...")
 
     try:
-        # 3. Execute the LLM using the YAML configs AND the trace_id!
-        response_msg = call_llm(
+        response_msg = await call_llm(
             messages=messages,
             response_schema=schema_json,
             tier=evaluator_def.config.llm_tier,

@@ -11,61 +11,53 @@ from core.telemetry import TelemetryLogger
 
 logger = logging.getLogger("AgenticCore.DAGRunner")
 
-WORKFLOW_RESERVE_USD = 0.50  # We lock 50 cents per workflow run
+WORKFLOW_RESERVE_USD = 0.50
 
-def run_agentic_loop(request: AgentRequest) -> AgentResponse:
+async def run_agentic_loop(request: AgentRequest) -> AgentResponse:
     telemetry = TelemetryLogger(trace_id=request.thread_id)
-    
+
     try:
-        # 1. THE PRE-FLIGHT DEPOSIT
-        budget_manager.reserve_deposit(trace_id=request.thread_id, max_budget_usd=WORKFLOW_RESERVE_USD)
-        
+        await budget_manager.reserve_deposit(trace_id=request.thread_id, max_budget_usd=WORKFLOW_RESERVE_USD)
+
         briefcase = initialize_or_resume_state(request)
 
         if not briefcase.execution_plan:
-            plan = generate_dag(request)
+            plan = await generate_dag(request)
             briefcase.execution_plan = plan.tasks
-            telemetry.log_decision("planner", f"Generated {len(briefcase.execution_plan)} SubTasks.", context="DAG Generation")
+            await telemetry.log_decision("planner", f"Generated {len(briefcase.execution_plan)} SubTasks.", context="DAG Generation")
             checkpoint_state(briefcase, request)
 
         while briefcase.current_step_index < len(briefcase.execution_plan):
             current_task = briefcase.execution_plan[briefcase.current_step_index]
-            
+
             if current_task.status == "completed":
                 briefcase.current_step_index += 1
                 continue
-                
+
             current_task.status = "in_progress"
             checkpoint_state(briefcase, request)
-            
-            success, output = execute_worker_node(
-                task=current_task, 
-                briefcase=briefcase, 
+
+            success, output = await execute_worker_node(
+                task=current_task,
+                briefcase=briefcase,
                 thread_id=request.thread_id
             )
-            
-            # --- SWARM ROUTING LOGIC ---
+
             if success and isinstance(output, str) and output.startswith("__YIELD__"):
                 target_agent = output.split("__YIELD__")[1]
-                
-                # 1. Mark current task as successfully yielded
+
                 current_task.status = "yielded"
                 briefcase.domain_state[current_task.agent_target] = {"status": "yielded to another agent"}
-                
-                # 2. Create the dynamic new task
+
                 new_task = SubTask(
                     agent_target=target_agent,
                     instruction=f"CONTINUE WORKFLOW. Context: {briefcase.domain_state.get('handoff_context', '')}",
                     status="pending"
                 )
-                
-                # 3. Inject it into the master plan right after the current step
+
                 briefcase.execution_plan.insert(briefcase.current_step_index + 1, new_task)
-                
-                # 4. Checkpoint the new DAG to the Database
                 session_manager.save_briefcase(request.thread_id, request.user_id, briefcase)
-                
-                # Move the pointer forward and loop again to trigger the new agent
+
                 briefcase.current_step_index += 1
                 continue
 
@@ -77,8 +69,8 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
 
             briefcase.domain_state[current_task.agent_target] = {"latest_output": output}
             current_task.status = "completed"
-            telemetry.log_state(current_task.agent_target, briefcase.current_step_index, briefcase.domain_state[current_task.agent_target])
-            
+            await telemetry.log_state(current_task.agent_target, briefcase.current_step_index, briefcase.domain_state[current_task.agent_target])
+
             briefcase.current_step_index += 1
             checkpoint_state(briefcase, request)
 
@@ -88,15 +80,13 @@ def run_agentic_loop(request: AgentRequest) -> AgentResponse:
             output=json.dumps(briefcase.domain_state),
             iterations=briefcase.current_step_index
         )
-        
     except BudgetExceededException as be:
         logger.error(f"[{request.thread_id}] Workflow terminated due to FinOps Guardrail: {str(be)}")
         return AgentResponse(status="budget_exceeded", trace_id=request.thread_id, output=str(be), iterations=0)
-        
+
     except Exception as e:
         logger.error(f"[{request.thread_id}] Fatal graph error:\n{traceback.format_exc()}")
         raise e
-        
+
     finally:
-        # 2. THE RECONCILIATION (Always refund unused money)
-        budget_manager.release_deposit(trace_id=request.thread_id)
+        await budget_manager.release_deposit(trace_id=request.thread_id)

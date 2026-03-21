@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
-from openai import OpenAI
+from openai import AsyncOpenAI  # 🚀 SWITCHED TO ASYNC OPENAI CLIENT
 from dotenv import load_dotenv
 
 from core.model_registry import MODEL_REGISTRY
@@ -12,29 +12,24 @@ from core.telemetry import TelemetryLogger
 logger = logging.getLogger("AgenticCore.LLM")
 load_dotenv()
 
-# --- TRANSIENT ERROR LOGIC ---
 class TransientAPIError(Exception):
-    """Raised specifically for 429 Rate Limits or 5xx Server Errors."""
     pass
 
 def _is_transient(exception: Exception) -> bool:
-    """Helper to decide if we should retry based on the error message."""
     err_str = str(exception).lower()
     return any(keyword in err_str for keyword in ["rate limit", "429", "502", "503", "504", "timeout", "connection reset"])
-# ----------------------------------
 
 _openai_clients = {}
 
-def _get_openai_client(base_url: str, api_key: str) -> OpenAI:
+def _get_openai_client(base_url: str, api_key: str) -> AsyncOpenAI:
     if base_url not in _openai_clients:
-        _openai_clients[base_url] = OpenAI(base_url=base_url, api_key=api_key)
+        _openai_clients[base_url] = AsyncOpenAI(base_url=base_url, api_key=api_key)
     return _openai_clients[base_url]
 
-def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
-    """Handles OpenAI, Groq, DeepSeek, vLLM, and any OpenAI-compatible API."""
+# 🚀 CHANGED TO ASYNC DEF
+async def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     client = _get_openai_client(config["base_url"], api_key)
 
-    # Strip internal 'cache_control' flags so the strict OpenAI SDK doesn't crash
     clean_messages = []
     for m in messages:
         clean_msg = {k: v for k, v in m.items() if k != "cache_control"}
@@ -43,7 +38,7 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
     kwargs = {
         "model": config["model"],
         "messages": clean_messages,
-        "temperature": temperature  # <-- NOW DYNAMICALLY PASSED
+        "temperature": temperature
     }
 
     if tools:
@@ -58,7 +53,7 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
         else:
             kwargs["response_format"] = {"type": "json_object"}
 
-    response = client.chat.completions.create(**kwargs)
+    response = await client.chat.completions.create(**kwargs)
     raw_msg = response.choices[0].message
     raw_usage = getattr(response, "usage", None)
 
@@ -84,8 +79,7 @@ def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Option
         raw_provider_response=raw_msg
     )
 
-def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
-    """Handles Anthropic Claude. Uses Explicit Ephemeral Caching."""
+async def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     logger.info("Anthropic adapter triggered. Translating Explicit Cache markers...")
 
     system_prompt = ""
@@ -95,11 +89,7 @@ def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[
         if m["role"] == "system":
             if m.get("cache_control"):
                 system_prompt = [
-                    {
-                        "type": "text", 
-                        "text": m["content"], 
-                        "cache_control": {"type": "ephemeral"}
-                    }
+                    {"type": "text", "text": m["content"], "cache_control": {"type": "ephemeral"}}
                 ]
             else:
                 system_prompt = m["content"]
@@ -107,25 +97,23 @@ def _execute_anthropic(config: Dict, messages: List[Dict], tools: Optional[List[
             clean_msg = {k: v for k, v in m.items() if k != "cache_control"}
             anthropic_messages.append(clean_msg)
 
-    raise NotImplementedError("Anthropic message translation complete, but SDK execution is pending.")
+    raise NotImplementedError("Anthropic SDK execution is pending.")
 
-# 🚀 The Tenacity Decorator: for exponential backoff
 @retry(
-    wait=wait_exponential(multiplier=1, min=2, max=10), # Waits 2s, 4s, 8s, 10s...
+    wait=wait_exponential(multiplier=1, min=2, max=10),
     stop=stop_after_attempt(5),
     retry=retry_if_exception_type(TransientAPIError),
     reraise=True
 )
-def call_llm(
+async def call_llm(
     messages: List[Dict], 
     tools: Optional[List[Dict]] = None, 
     response_schema: Optional[Dict] = None,
     tier: str = "worker",
     trace_id: Optional[str] = None,
-    temperature: Optional[float] = None  # <-- NEW PARAMETER ADDED
+    temperature: Optional[float] = None
 ) -> StandardLLMResponse:
-    """The Universal Gateway: Routes requests based on provider strategy."""
-
+    
     if tier not in MODEL_REGISTRY:
         logger.warning(f"Tier '{tier}' not found. Falling back to 'worker'.")
         tier = "worker"
@@ -136,21 +124,18 @@ def call_llm(
     if not api_key:
         raise ValueError(f"CRITICAL: Missing API key for tier '{tier}'.")
 
-    # If temperature isn't explicitly passed via YAML/kwargs, fallback to model config
     validated_temperature: float = float(temperature if temperature is not None else config.get("default_temp", 0.1))
 
     logger.info(f"LLM [{tier.upper()}]: Routing to {config['model']} via {config['provider']} (Temp: {validated_temperature})")
 
     try:
-        # 1. Execute Strategy Pattern Routing
         if config["provider"] in ["openai", "groq", "vllm", "deepseek"]:
-            response = _execute_openai_compatible(config, messages, tools, response_schema, api_key, validated_temperature)
+            response = await _execute_openai_compatible(config, messages, tools, response_schema, api_key, validated_temperature)
         elif config["provider"] == "anthropic":
-            response = _execute_anthropic(config, messages, tools, response_schema, api_key, validated_temperature)
+            response = await _execute_anthropic(config, messages, tools, response_schema, api_key, validated_temperature)
         else:
             raise ValueError(f"Unsupported provider: {config['provider']}")
 
-        # 2. FINOPS MATH: Calculate actual USD cost
         if response.usage:
             p_cost = (response.usage.prompt_tokens / 1_000_000.0) * config.get("input_cost_per_m", 0.0)
             c_cost = (response.usage.completion_tokens / 1_000_000.0) * config.get("output_cost_per_m", 0.0)
@@ -162,12 +147,11 @@ def call_llm(
         return response
 
     except Exception as e:
-        # 3. TELEMETRY & RETRY ROUTING
         if _is_transient(e):
             logger.warning(f"LLM Transient Error ({tier}): {str(e)}. Tenacity will backoff and retry...")
             if trace_id:
                 telemetry = TelemetryLogger(trace_id=trace_id)
-                telemetry.log_decision(
+                await telemetry.log_decision(
                     agent_id=f"llm_gateway_{tier}",
                     reasoning=f"Transient API error: {str(e)}. Triggering exponential backoff.",
                     context="Transient Failure Retry"
@@ -177,9 +161,9 @@ def call_llm(
             logger.error(f"LLM Fatal Execution Failed on tier '{tier}': {str(e)}")
             if trace_id:
                 telemetry = TelemetryLogger(trace_id=trace_id)
-                telemetry.log_decision(
+                await telemetry.log_decision(
                     agent_id=f"llm_gateway_{tier}",
                     reasoning=f"Terminal API error: {str(e)}. Aborting LLM call.",
                     context="Terminal LLM Failure"
                 )
-            raise e # Instantly kills the run (e.g., bad API key, invalid schema)
+            raise e
