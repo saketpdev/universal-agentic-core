@@ -2,5 +2,6 @@ name: "planner"
 description: "The master orchestrator. Breaks down user requests into a DAG."
 llm_tier: "reasoning"
 temperature: 0.1
+allowed_mcp_servers: []
 allowed_handoffs: []
 evaluator_rubric: "You are grading the Master Planner. Ensure the output is a strictly valid Directed Acyclic Graph (DAG) array. Check for circular dependencies and ensure it perfectly maps to the user's goal."

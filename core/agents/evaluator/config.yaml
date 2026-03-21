@@ -2,5 +2,5 @@ name: "evaluator"
 description: "The Universal Judge. Evaluates agent outputs against strict objectives and Pydantic schemas to enforce quality assurance."
 llm_tier: "judge"
 temperature: 0.0
-# The Evaluator does not execute tools or hand off tasks; it only grades.
+allowed_mcp_servers: []
 allowed_handoffs: []

@@ -24,8 +24,9 @@ class AgentConfig(BaseModel):
     llm_tier: str
     temperature: float = 0.1
     allowed_handoffs: List[str] = Field(default_factory=list)
+    allowed_mcp_servers: List[str] = Field(default_factory=list)
     evaluator_rubric: Optional[str] = None
-    evaluator_schema_name: str = "base" # defaults to "base" if left blank
+    evaluator_schema_name: str = "base"
 
 # 2. The unified representation of an Agent in memory
 class AgentDefinition(BaseModel):

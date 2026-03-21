@@ -3,5 +3,6 @@ description: "Handles invoice extraction, financial validation, and ledger arith
 llm_tier: "worker"
 temperature: 0.1
 allowed_handoffs: ["customer_support"]
+allowed_mcp_servers: ["internal_ledger_mcp"]
 evaluator_rubric: "Check the ledger arithmetic."
 evaluator_schema_name: "finance"

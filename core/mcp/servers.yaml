@@ -1,0 +1,16 @@
+# Global Registry of all connected MCP Servers
+mcpServers:
+  internal_ledger_mcp:
+    # Example of an SSE (Server-Sent Events) network connection
+    transport: "sse"
+    url: "http://localhost:8080/sse"
+
+  github_mcp:
+    # Example of a local binary connection via standard input/output
+    transport: "stdio"
+    command: "npx"
+    args:
+      - "-y"
+      - "@modelcontextprotocol/server-github"
+    env:
+      GITHUB_PERSONAL_ACCESS_TOKEN: "your_token_here"
