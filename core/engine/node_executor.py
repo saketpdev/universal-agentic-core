@@ -115,18 +115,28 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
             messages.append(assistant_msg)
 
             if response.tool_calls:
+                handoff_target = None
+                handoff_reason = None
+                
+                # 1. Identify if a handoff was requested
                 for tc in response.tool_calls:
                     if tc.function_name == "transfer_to_agent":
-                        try:
-                            args = json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
-                        except json.JSONDecodeError:
-                            args = {}
-                        target = args.get("target_agent", "unknown")
-                        reason = args.get("reason", "No reason provided.")
+                        args = json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
+                        handoff_target = args.get("target_agent", "unknown")
+                        handoff_reason = args.get("reason", "No reason provided.")
 
-                        await telemetry.log_decision(task.agent_target, f"Yielding to {target}. Reason: {reason}", "Swarm Handoff Routing")
-                        briefcase.domain_state["handoff_context"] = reason
-                        return True, f"__YIELD__{target}"
+                # 2. Execute all OTHER tools concurrently
+                standard_calls = [tc for tc in response.tool_calls if tc.function_name != "transfer_to_agent"]
+                if standard_calls:
+                    tool_tasks = [_execute_single_tool(call, task, thread_id, telemetry) for call in standard_calls]
+                    completed_tool_messages = await asyncio.gather(*tool_tasks)
+                    messages.extend(completed_tool_messages)
+
+                # 3. NOW yield control to the next agent safely
+                if handoff_target:
+                    await telemetry.log_decision(task.agent_target, f"Yielding to {handoff_target}. Reason: {handoff_reason}", "Swarm Handoff Routing")
+                    briefcase.domain_state["handoff_context"] = {"reason": handoff_reason or "No reason provided."}
+                    return True, f"__YIELD__{handoff_target}"
 
             if not response.tool_calls:
                 worker_final_output = safe_content

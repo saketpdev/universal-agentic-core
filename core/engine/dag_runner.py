@@ -46,12 +46,18 @@ async def run_agentic_loop(request: AgentRequest) -> AgentResponse:
             if success and isinstance(output, str) and output.startswith("__YIELD__"):
                 target_agent = output.split("__YIELD__")[1]
 
+                # 1. Mark current task as successfully yielded
                 current_task.status = "yielded"
                 briefcase.domain_state[current_task.agent_target] = {"status": "yielded to another agent"}
 
+                # 🚀 FIXED: Safely extract the string from the dictionary
+                handoff_data = briefcase.domain_state.get("handoff_context", {})
+                handoff_reason_str = handoff_data.get("reason", "") if isinstance(handoff_data, dict) else ""
+
+                # 2. Create the dynamic new task
                 new_task = SubTask(
                     agent_target=target_agent,
-                    instruction=f"CONTINUE WORKFLOW. Context: {briefcase.domain_state.get('handoff_context', '')}",
+                    instruction=f"CONTINUE WORKFLOW. Context: {handoff_reason_str}",
                     status="pending"
                 )
 

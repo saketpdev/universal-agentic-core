@@ -12,7 +12,6 @@ from core.telemetry import TelemetryLogger
 from models.state import AgentRequest
 from models.telemetry import ActionStatus
 
-# Setup Logging for the Worker Node
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger("WorkerDaemon")
 load_dotenv()
@@ -33,9 +32,8 @@ async def process_workflow(thread_id: str):
 
             logger.info(f"Worker processing thread: {thread_id} (Active Slots: {MAX_CONCURRENT_TASKS - semaphore._value}/{MAX_CONCURRENT_TASKS})")
 
-            # Note: SQLite operations remain synchronous, which is acceptable 
-            # for light file-based DBs, but the heavy LLM/Network lifting is fully async.
-            briefcase = session_manager.get_briefcase(thread_id)
+            # 🚀 NON-BLOCKING SQLITE FETCH
+            briefcase = await asyncio.to_thread(session_manager.get_briefcase, thread_id)
 
             if not briefcase:
                 error_msg = f"Critical Fault: Thread {thread_id} missing from SQLite DB! Dropping task."
@@ -81,7 +79,8 @@ async def process_workflow(thread_id: str):
                     result_summary=msg
                 )
 
-                session_manager.create_review_ticket(thread_id, review_type, msg)
+                # 🚀 NON-BLOCKING SQLITE WRITE
+                await asyncio.to_thread(session_manager.create_review_ticket, thread_id, review_type, msg)
 
             else:
                 logger.info(f"✅ Worker finished thread: {thread_id} in {latency_ms:.0f}ms")
@@ -119,4 +118,11 @@ async def start_worker():
             await asyncio.sleep(5)
 
 if __name__ == "__main__":
-    asyncio.run(start_worker())
+    try:
+        asyncio.run(start_worker())
+    except KeyboardInterrupt:
+        logger.info("\nShutdown signal received. Closing event loop...")
+    finally:
+        logger.info("Gracefully severing all MCP Network connections...")
+        asyncio.run(mcp_manager.disconnect_all())
+        logger.info("Worker Node successfully terminated.")
