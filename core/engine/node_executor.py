@@ -2,10 +2,11 @@ import json
 import time
 import uuid
 import logging
-import asyncio # 🚀 NEEDED FOR CONCURRENCY
+import asyncio
 from typing import Any, Dict, Optional, Tuple, cast
 
 from core.mcp.manager import mcp_manager
+from core.mcp.router import route_and_execute_tool
 from core.llm import call_llm
 from core.infrastructure import db, budget_manager
 from core.security import asymmetric_action_gate
@@ -18,7 +19,7 @@ from models.telemetry import ActionStatus
 from models.llm_schemas import StandardLLMResponse
 from models.evaluations.base import BaseEvaluationSchema
 
-from tools.registry import execute_secure_tool, LLM_TOOLS
+from core.engine.system_tools import SYSTEM_TOOLS
 
 logger = logging.getLogger("AgenticCore.NodeExecutor")
 
@@ -44,15 +45,8 @@ async def _execute_single_tool(call, task, thread_id, telemetry) -> Dict[str, An
             action_status = ActionStatus.FAILED
         else:
             try:
-                # 🚀 ROUTER CHECK: Is this an MCP tool or a local Python tool?
-                if "__" in call.function_name:
-                    # It's an MCP Tool! Route it over the network.
-                    server_name = call.function_name.split("__")[0]
-                    args_dict = json.loads(call.arguments)
-                    result = await mcp_manager.execute_tool(server_name, call.function_name, args_dict)
-                else:
-                    # It's a Local Tool! Execute normal Python function.
-                    result = execute_secure_tool(call.function_name, call.arguments)
+                # 🚀 DELEGATED TO THE UNIVERSAL ROUTER
+                result = await route_and_execute_tool(call.function_name, call.arguments)
                 await db.save_idempotency(hash_key, result)
             except Exception as e:
                 logger.error(f"Tool {call.function_name} crashed: {str(e)}")
@@ -78,9 +72,10 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
     messages = [{"role": "system", "content": system_prompt, "cache_control": True}]
     messages.append({"role": "user", "content": f"INSTRUCTION: {task.instruction}\n\nVAULT DATA: {json.dumps(agent_specific_data)}"})
 
-    dynamic_tools = list(LLM_TOOLS) # Base tools (like Swarm Handoff) are always available
+    # 🚀 START WITH SYSTEM TOOLS
+    dynamic_tools = list(SYSTEM_TOOLS) 
 
-    # Check the Agent's YAML config for authorized servers
+    # 🚀 DYNAMICALLY APPEND AUTHORIZED MCP TOOLS
     for server in agent_def.config.allowed_mcp_servers:
         mcp_tools = await mcp_manager.get_tools_for_server(server)
         dynamic_tools.extend(mcp_tools)
@@ -137,7 +132,7 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
                 worker_final_output = safe_content
                 break
 
-            # 🚀 THE MAGIC: ASYNCIO.GATHER FOR PARALLEL TOOL CALLS
+            # 🚀 PARALLEL EXECUTION OF ROUTED TOOLS
             tool_tasks = [_execute_single_tool(call, task, thread_id, telemetry) for call in response.tool_calls]
             completed_tool_messages = await asyncio.gather(*tool_tasks)
 
@@ -149,7 +144,6 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
         dynamic_evaluator_rubric = agent_evaluator_rubric or f"You are a strict QA Auditor reviewing the {task.agent_target.upper()}. Ensure the output fully satisfies the objective."
         dynamic_evaluator_schema = agent_def.get_evaluation_schema
 
-        # 🚀 AWAIT EVALUATOR
         evaluation = await run_dynamic_evaluation(
             output_text=worker_final_output,
             objective=task.instruction,
