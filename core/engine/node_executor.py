@@ -5,6 +5,7 @@ import logging
 import asyncio # 🚀 NEEDED FOR CONCURRENCY
 from typing import Any, Dict, Optional, Tuple, cast
 
+from core.mcp.manager import mcp_manager
 from core.llm import call_llm
 from core.infrastructure import db, budget_manager
 from core.security import asymmetric_action_gate
@@ -43,8 +44,15 @@ async def _execute_single_tool(call, task, thread_id, telemetry) -> Dict[str, An
             action_status = ActionStatus.FAILED
         else:
             try:
-                # Tools themselves are sync for now, we wrap them
-                result = execute_secure_tool(call.function_name, call.arguments)
+                # 🚀 ROUTER CHECK: Is this an MCP tool or a local Python tool?
+                if "__" in call.function_name:
+                    # It's an MCP Tool! Route it over the network.
+                    server_name = call.function_name.split("__")[0]
+                    args_dict = json.loads(call.arguments)
+                    result = await mcp_manager.execute_tool(server_name, call.function_name, args_dict)
+                else:
+                    # It's a Local Tool! Execute normal Python function.
+                    result = execute_secure_tool(call.function_name, call.arguments)
                 await db.save_idempotency(hash_key, result)
             except Exception as e:
                 logger.error(f"Tool {call.function_name} crashed: {str(e)}")
@@ -70,6 +78,13 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
     messages = [{"role": "system", "content": system_prompt, "cache_control": True}]
     messages.append({"role": "user", "content": f"INSTRUCTION: {task.instruction}\n\nVAULT DATA: {json.dumps(agent_specific_data)}"})
 
+    dynamic_tools = list(LLM_TOOLS) # Base tools (like Swarm Handoff) are always available
+
+    # Check the Agent's YAML config for authorized servers
+    for server in agent_def.config.allowed_mcp_servers:
+        mcp_tools = await mcp_manager.get_tools_for_server(server)
+        dynamic_tools.extend(mcp_tools)
+
     eval_retries = 0
     worker_final_output = ""
     evaluation: Optional[BaseEvaluationSchema] = None
@@ -78,12 +93,12 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
         tool_iters = 0
 
         while tool_iters < MAX_TOOL_ITERS:
-            # 🚀 AWAIT LLM
+
             response: StandardLLMResponse = await call_llm(
                         messages=messages,
                         tier=agent_def.config.llm_tier,
                         temperature=agent_def.config.temperature,
-                        tools=LLM_TOOLS,
+                        tools=dynamic_tools if dynamic_tools else None,
                         trace_id=thread_id
                     )
 

@@ -3,11 +3,13 @@ import logging
 import asyncio
 from dotenv import load_dotenv
 
+from core.mcp.manager import mcp_manager
 from core.infrastructure import task_queue
 from core.memory import session_manager
 from core.engine.dag_runner import run_agentic_loop
-from models.state import AgentRequest
 from core.telemetry import TelemetryLogger
+
+from models.state import AgentRequest
 from models.telemetry import ActionStatus
 
 # Setup Logging for the Worker Node
@@ -98,8 +100,13 @@ async def process_workflow(thread_id: str):
 
 async def start_worker():
     """The Infinite Event Loop."""
+    
+    # Boot up all external MCP network connections!
+    logger.info("Initializing MCP Network Connections...")
+    await mcp_manager.connect_all()
+    
     logger.info(f"🚀 Async Worker Node Booting Up... (Max Concurrency: {MAX_CONCURRENT_TASKS})")
-
+    
     while True:
         try:
             thread_id = await task_queue.dequeue(timeout=1)
