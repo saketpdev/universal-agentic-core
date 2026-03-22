@@ -1,8 +1,5 @@
-import json
-import time
 from typing import Any, Optional, cast
-import redis.asyncio as redis  # 🚀 SWITCHED TO ASYNC REDIS
-import uuid
+import redis.asyncio as redis
 import logging
 import hashlib
 from opentelemetry import baggage

@@ -1,26 +1,28 @@
 name: "financial_audit"
 description: "SOP for processing and auditing a new vendor invoice."
 
-# The engine processes stages sequentially: Stage 1 -> Stage 2 -> Stage 3
 stages:
-  # --- t1 (Sequential Start) ---
+  # --- Stage 0 (Sequential Start) ---
   - stage_name: "Ingestion"
     tasks:
       - target_agent: "data_fetcher"
         instruction: "Extract the raw text and line items from the provided invoice ID."
+        on_failure: "TERMINATE" # Critical: If we can't read it, stop everything.
 
-  # --- (t2a | t2b) (Parallel Execution) ---
+  # --- Stage 1 (Parallel Execution) ---
   - stage_name: "Verification"
     tasks:
-      # Because these are in the same stage, the engine runs them CONCURRENTLY
       - target_agent: "finance_agent"
         instruction: "Read the extracted text and verify all mathematical calculations."
+        on_failure: "PAUSE" # Sensitive: If the math fails, pause the DAG for a human.
 
       - target_agent: "compliance_agent"
         instruction: "Check the vendor name against the approved enterprise vendor list."
+        on_failure: "IGNORE" # Non-critical: If compliance fails, log it but keep going.
 
-  # --- t3 (Sequential Consolidation) ---
+  # --- Stage 2 (Sequential Consolidation) ---
   - stage_name: "Consolidation"
     tasks:
       - target_agent: "evaluator"
         instruction: "Read the outputs from the finance and compliance agents. Generate a final YES/NO approval report."
+        on_failure: "TERMINATE"

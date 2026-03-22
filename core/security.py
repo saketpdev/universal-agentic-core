@@ -2,7 +2,6 @@ import logging
 
 logger = logging.getLogger("AgenticCore.Security")
 
-# PILLAR 6: Untrusted Content Boundaries
 def handle_external_content(content: str) -> str:
     """Wraps inbound external data to prevent prompt injection."""
     return f"<untrusted_data>\n{content}\n</untrusted_data>"

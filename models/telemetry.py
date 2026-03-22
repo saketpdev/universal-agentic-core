@@ -13,6 +13,7 @@ class ActionStatus(str, Enum):
     PENDING = "pending"
     SUCCESS = "success"
     FAILED = "failed"
+    YIELDED = "yielded" # status for dynamic handoffs
 
 class BaseEvent(BaseModel):
     # Enforces ISO 8601 UTC timestamps
@@ -38,7 +39,7 @@ class ActionEvent(BaseEvent):
 
 class StateEvent(BaseEvent):
     event_type: EventType = EventType.STATE
-    current_step_index: int
+    stage_index: int
     domain_update: Dict[str, Any]
 
 class MetricEvent(BaseEvent):

@@ -21,7 +21,6 @@ class TelemetryLogger:
     def __init__(self, trace_id: str):
         self.trace_id = trace_id
 
-    # 🚀 AWAIT THE REDIS INCREMENT
     async def _get_sequence_id(self) -> int:
         try:
             raw_val = await redis_client.incr("telemetry:global_sequence_id")
@@ -68,16 +67,16 @@ class TelemetryLogger:
             "tool.status": status.value
         })
 
-    async def log_state(self, agent_id: str, step_index: int, domain_update: dict):
+    async def log_state(self, agent_id: str, stage_index: int, domain_update: dict):
         seq_id = await self._get_sequence_id()
         event = StateEvent(
             trace_id=self.trace_id,
             sequence_id=seq_id,
             agent_id=agent_id,
-            current_step_index=step_index,
+            stage_index=stage_index,
             domain_update=domain_update
         )
-        self._record_otel_event(f"state.checkpoint", event, {"step.index": step_index})
+        self._record_otel_event(f"state.checkpoint", event, {"stage.index": stage_index})
 
     async def log_metric(self, agent_id: str, tier: str, prompt_tokens: int, completion_tokens: int, cost_usd: float = 0.0):
         total = prompt_tokens + completion_tokens

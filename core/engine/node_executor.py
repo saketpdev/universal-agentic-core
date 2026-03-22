@@ -14,7 +14,7 @@ from core.agents.agent_registry import swarm_registry
 from core.evaluator import run_dynamic_evaluation
 from core.telemetry import TelemetryLogger
 
-from models.state import SubTask, SharedBriefcase
+from models.state import Task, SharedBriefcase
 from models.telemetry import ActionStatus
 from models.llm_schemas import StandardLLMResponse
 from models.evaluations.base import BaseEvaluationSchema
@@ -45,7 +45,6 @@ async def _execute_single_tool(call, task, thread_id, telemetry) -> Dict[str, An
             action_status = ActionStatus.FAILED
         else:
             try:
-                # 🚀 DELEGATED TO THE UNIVERSAL ROUTER
                 result = await route_and_execute_tool(call.function_name, call.arguments)
                 await db.save_idempotency(hash_key, result)
             except Exception as e:
@@ -63,7 +62,7 @@ async def _execute_single_tool(call, task, thread_id, telemetry) -> Dict[str, An
         "content": result
     }
 
-async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_id: str) -> Tuple[bool, str]:
+async def execute_worker_node(task: Task, briefcase: SharedBriefcase, thread_id: str) -> Tuple[bool, str]:
     telemetry = TelemetryLogger(trace_id=thread_id)
     agent_def = swarm_registry.get_agent(task.agent_target)
     agent_specific_data = briefcase.domain_state.get(task.agent_target, {})
@@ -72,10 +71,8 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
     messages = [{"role": "system", "content": system_prompt, "cache_control": True}]
     messages.append({"role": "user", "content": f"INSTRUCTION: {task.instruction}\n\nVAULT DATA: {json.dumps(agent_specific_data)}"})
 
-    # 🚀 START WITH SYSTEM TOOLS
-    dynamic_tools = list(SYSTEM_TOOLS) 
+    dynamic_tools = list(SYSTEM_TOOLS)
 
-    # 🚀 DYNAMICALLY APPEND AUTHORIZED MCP TOOLS
     for server in agent_def.config.allowed_mcp_servers:
         mcp_tools = await mcp_manager.get_tools_for_server(server)
         dynamic_tools.extend(mcp_tools)
@@ -117,22 +114,19 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
             if response.tool_calls:
                 handoff_target = None
                 handoff_reason = None
-                
-                # 1. Identify if a handoff was requested
+
                 for tc in response.tool_calls:
                     if tc.function_name == "transfer_to_agent":
                         args = json.loads(tc.arguments) if isinstance(tc.arguments, str) else tc.arguments
                         handoff_target = args.get("target_agent", "unknown")
                         handoff_reason = args.get("reason", "No reason provided.")
 
-                # 2. Execute all OTHER tools concurrently
                 standard_calls = [tc for tc in response.tool_calls if tc.function_name != "transfer_to_agent"]
                 if standard_calls:
                     tool_tasks = [_execute_single_tool(call, task, thread_id, telemetry) for call in standard_calls]
                     completed_tool_messages = await asyncio.gather(*tool_tasks)
                     messages.extend(completed_tool_messages)
 
-                # 3. NOW yield control to the next agent safely
                 if handoff_target:
                     await telemetry.log_decision(task.agent_target, f"Yielding to {handoff_target}. Reason: {handoff_reason}", "Swarm Handoff Routing")
                     briefcase.domain_state["handoff_context"] = {"reason": handoff_reason or "No reason provided."}
@@ -142,7 +136,6 @@ async def execute_worker_node(task: SubTask, briefcase: SharedBriefcase, thread_
                 worker_final_output = safe_content
                 break
 
-            # 🚀 PARALLEL EXECUTION OF ROUTED TOOLS
             tool_tasks = [_execute_single_tool(call, task, thread_id, telemetry) for call in response.tool_calls]
             completed_tool_messages = await asyncio.gather(*tool_tasks)
 

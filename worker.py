@@ -79,7 +79,6 @@ async def process_workflow(thread_id: str):
                     result_summary=msg
                 )
 
-                # 🚀 NON-BLOCKING SQLITE WRITE
                 await asyncio.to_thread(session_manager.create_review_ticket, thread_id, review_type, msg)
 
             else:
@@ -99,13 +98,13 @@ async def process_workflow(thread_id: str):
 
 async def start_worker():
     """The Infinite Event Loop."""
-    
+
     # Boot up all external MCP network connections!
     logger.info("Initializing MCP Network Connections...")
     await mcp_manager.connect_all()
-    
+
     logger.info(f"🚀 Async Worker Node Booting Up... (Max Concurrency: {MAX_CONCURRENT_TASKS})")
-    
+
     while True:
         try:
             thread_id = await task_queue.dequeue(timeout=1)

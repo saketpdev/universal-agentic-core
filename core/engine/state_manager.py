@@ -1,6 +1,4 @@
-import json
 import logging
-from typing import Any, Dict, cast
 from models.state import SharedBriefcase, AgentRequest
 from core.memory import session_manager
 
@@ -8,10 +6,11 @@ logger = logging.getLogger("AgenticCore.StateManager")
 
 def initialize_or_resume_state(request: AgentRequest) -> SharedBriefcase:
     """Strictly loads existing Briefcase or creates an empty one."""
-    raw_history = session_manager.get_briefcase(request.thread_id)
-    if raw_history:
-        briefcase = SharedBriefcase(**cast(Dict[str, Any], raw_history))
-        logger.info(f"[{request.thread_id}] Resuming at Step {briefcase.current_step_index}")
+
+    briefcase = session_manager.get_briefcase(request.thread_id)
+
+    if briefcase:
+        logger.info(f"[{request.thread_id}] Resuming at Stage {briefcase.current_stage_index}")
         return briefcase
 
     logger.info(f"[{request.thread_id}] Creating fresh Briefcase for new session.")

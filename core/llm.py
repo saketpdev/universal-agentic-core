@@ -2,7 +2,7 @@ import os
 import logging
 from typing import List, Dict, Any, Optional
 from tenacity import retry, wait_exponential, stop_after_attempt, retry_if_exception_type
-from openai import AsyncOpenAI  # 🚀 SWITCHED TO ASYNC OPENAI CLIENT
+from openai import AsyncOpenAI
 from dotenv import load_dotenv
 
 from core.model_registry import MODEL_REGISTRY
@@ -26,7 +26,6 @@ def _get_openai_client(base_url: str, api_key: str) -> AsyncOpenAI:
         _openai_clients[base_url] = AsyncOpenAI(base_url=base_url, api_key=api_key)
     return _openai_clients[base_url]
 
-# 🚀 CHANGED TO ASYNC DEF
 async def _execute_openai_compatible(config: Dict, messages: List[Dict], tools: Optional[List[Dict]], response_schema: Optional[Dict], api_key: str, temperature: float) -> StandardLLMResponse:
     client = _get_openai_client(config["base_url"], api_key)
 
@@ -113,7 +112,7 @@ async def call_llm(
     trace_id: Optional[str] = None,
     temperature: Optional[float] = None
 ) -> StandardLLMResponse:
-    
+
     if tier not in MODEL_REGISTRY:
         logger.warning(f"Tier '{tier}' not found. Falling back to 'worker'.")
         tier = "worker"

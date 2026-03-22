@@ -5,15 +5,13 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from models.state import SharedBriefcase
-from models.db_models import Base, ThreadRecord, StepLogRecord, HumanReviewRecord
+from models.db_models import Base, ThreadRecord, StageLogRecord, HumanReviewRecord
 
 logger = logging.getLogger("AgenticCore.Memory")
 
-# Keep your original DB path logic
 DB_PATH = os.path.join(os.path.dirname(__file__), "..", "sessions.db")
 DATABASE_URL = f"sqlite:///{DB_PATH}"
 
-# SQLAlchemy Setup
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -33,7 +31,7 @@ class SessionManager:
             if record:
                 logger.info(f"Memory: Restored existing Briefcase for thread '{thread_id}'")
                 return SharedBriefcase.model_validate_json(record.briefcase_json) # type: ignore
-            
+
             logger.info(f"Memory: No existing state for thread '{thread_id}'")
             return None
 
@@ -41,9 +39,8 @@ class SessionManager:
         """Persists the Pydantic Briefcase."""
         with SessionLocal() as db:
             record = db.query(ThreadRecord).filter(ThreadRecord.thread_id == thread_id).first()
-            
             if record:
-                # Update existing (Replicates your ON CONFLICT DO UPDATE)
+                # Update existing (Replicates ON CONFLICT DO UPDATE)
                 record.briefcase_json = briefcase.model_dump_json() # type: ignore
                 record.status = status # type: ignore
             else:
@@ -55,15 +52,15 @@ class SessionManager:
                     briefcase_json=briefcase.model_dump_json()
                 )
                 db.add(new_thread)
-                
+
             db.commit()
 
-    def log_raw_output(self, thread_id: str, step_index: int, agent_id: str, raw_output: str, cost_usd: float = 0.0):
+    def log_raw_output(self, thread_id: str, stage_index: int, agent_id: str, raw_output: str, cost_usd: float = 0.0):
         """THE VAULT: Saves the massive token outputs strictly for humans/dashboards."""
         with SessionLocal() as db:
-            log_entry = StepLogRecord(
+            log_entry = StageLogRecord(
                 thread_id=thread_id,
-                step_index=step_index,
+                stage_index=stage_index,
                 agent_id=agent_id,
                 raw_output=raw_output,
                 cost_usd=cost_usd
@@ -84,5 +81,4 @@ class SessionManager:
             db.add(ticket)
             db.commit()
 
-# Export the singleton instance
 session_manager = SessionManager()
