@@ -18,6 +18,7 @@ class AgentRequest(BaseModel):
     system_prompt: str = "You are a deterministic backend agent."
     user_id: str
     thread_id: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Pass this to continue a past conversation.")
+    workflow_name: Optional[str] = Field(default=None, description="The name of the YAML workflow template to load (e.g., 'financial_audit')")
 
 class AgentResponse(BaseModel):
     status: str

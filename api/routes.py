@@ -1,3 +1,4 @@
+import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
@@ -9,58 +10,93 @@ from models.telemetry import ActionStatus
 
 router = APIRouter()
 
-# New response model since we no longer wait for the LLM to finish
 class AsyncAcceptedResponse(BaseModel):
     status: str
     thread_id: str
     message: str
+    execution_type: str
 
-@router.post("/execute", response_model=AsyncAcceptedResponse)
-def execute_agent(request: AgentRequest):
-    # 1. Start the OpenTelemetry Trace right at the Gateway!
+# ==========================================
+# ROUTE 1: INDEFINITE TASKS (The Swarm)
+# ==========================================
+@router.post("/executeTask", response_model=AsyncAcceptedResponse)
+async def execute_ad_hoc_task(request: AgentRequest):
+    """
+    Handles natural language requests.
+    Relies on the LLM Planner to dynamically generate the DAG.
+    """
     telemetry = TelemetryLogger(trace_id=request.thread_id)
-    
+
     try:
-        telemetry.log_decision(
+        # 🚀 AWAIT the async telemetry
+        await telemetry.log_decision(
             agent_id="api_gateway",
-            reasoning=f"Received asynchronous workflow request from user {request.user_id}",
-            context="API Ingestion"
+            reasoning=f"Received unstructured task from {request.user_id}",
+            context="Ad-Hoc Ingestion"
         )
 
-        # 2. Check if resuming, or starting fresh
-        briefcase = session_manager.get_briefcase(request.thread_id)
+        # 🚀 NON-BLOCKING SQLITE FETCH
+        briefcase = await asyncio.to_thread(session_manager.get_briefcase, request.thread_id)
         if not briefcase:
-            # Ground Zero Initialization
             briefcase = SharedBriefcase(
-                thread_id=request.thread_id, 
+                thread_id=request.thread_id,
                 original_user_prompt=request.user_prompt
             )
-            # Save the initial empty state to SQLite State Machine
-            session_manager.save_briefcase(request.thread_id, request.user_id, briefcase, status="QUEUED")
-        
-        # 3. Drop it in the Redis Queue
-        task_queue.enqueue(request.thread_id)
-        
-        # 4. Log the successful handoff
-        telemetry.log_action(
-            agent_id="api_gateway",
-            correlation_id=request.thread_id,
-            tool_name="redis_enqueue",
-            arguments=f'{{"queue": "agentic:task_queue"}}',
-            status=ActionStatus.SUCCESS
-        )
+            # 🚀 NON-BLOCKING SQLITE WRITE
+            await asyncio.to_thread(session_manager.save_briefcase, request.thread_id, request.user_id, briefcase, "QUEUED")
 
-        # 5. Instantly return to the client (Zero LLM Latency)
+        # 🚀 AWAIT the async Redis Queue
+        await task_queue.enqueue(request.thread_id)
+
         return AsyncAcceptedResponse(
             status="accepted",
             thread_id=request.thread_id,
-            message="Workflow queued successfully. Poll the database for updates."
+            message="Ad-Hoc Task queued. The Master Planner is decomposing the request.",
+            execution_type="GENERATIVE_DAG"
         )
-        
     except Exception as e:
-        telemetry.log_decision(
+        raise HTTPException(status_code=500, detail=str(e))
+
+# ==========================================
+# ROUTE 2: DEFINITE TASKS (SOP Workflows)
+# ==========================================
+@router.post("/executeWorkflow", response_model=AsyncAcceptedResponse)
+async def execute_strict_workflow(request: AgentRequest):
+    """
+    Handles predefined Standard Operating Procedures.
+    Bypasses the LLM Planner completely and loads the requested YAML graph.
+    """
+    # 🚀 FIXED: Checking for the correct workflow_name variable!
+    if not request.workflow_name:
+        raise HTTPException(status_code=400, detail="workflow_name is required for this endpoint.")
+
+    telemetry = TelemetryLogger(trace_id=request.thread_id)
+    try:
+        # 🚀 AWAIT the async telemetry
+        await telemetry.log_decision(
             agent_id="api_gateway",
-            reasoning=f"Failed to enqueue task: {str(e)}",
-            context="API Crash"
+            reasoning=f"Received strict workflow [{request.workflow_name}] from {request.user_id}",
+            context="SOP Ingestion"
         )
+
+        # 🚀 NON-BLOCKING SQLITE FETCH
+        briefcase = await asyncio.to_thread(session_manager.get_briefcase, request.thread_id)
+        if not briefcase:
+            briefcase = SharedBriefcase(
+                thread_id=request.thread_id,
+                original_user_prompt=request.user_prompt
+            )
+            # We save the requested workflow_name into the briefcase so the Runner knows to load the YAML
+            await asyncio.to_thread(session_manager.save_briefcase, request.thread_id, request.user_id, briefcase, "QUEUED")
+
+        await task_queue.enqueue(request.thread_id)
+
+        return AsyncAcceptedResponse(
+            status="accepted",
+            thread_id=request.thread_id,
+            message=f"Workflow '{request.workflow_name}' queued for parallel execution.",
+            execution_type="DECLARATIVE_DAG"
+        )
+
+    except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
